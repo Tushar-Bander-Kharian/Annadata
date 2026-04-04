@@ -23,6 +23,7 @@ from annadata.config import (
     CROP_DB,
     GROK_API_KEY,
     LLM_BACKEND,
+    REGION_SOIL_PRESETS,
     SOIL_TEXTURES,
     STAGE_BOUNDARIES,
 )
@@ -88,15 +89,45 @@ def _get_crop() -> CropVariety:
 
 
 def _get_soil() -> SoilState:
-    console.print("\n[bold]Soil Parameters[/bold]  [dim](press Enter to use defaults)[/dim]")
+    """Collect soil parameters, optionally loading from a regional preset."""
+    console.print("\n[bold]Soil Parameters[/bold]")
+
+    # --- Regional preset shortcut ---
+    all_preset_keys = [
+        key
+        for presets in REGION_SOIL_PRESETS.values()
+        for key in presets
+    ]
+    console.print("  [dim]Available regional presets (measured field data):[/dim]")
+    for state, presets in REGION_SOIL_PRESETS.items():
+        for key, meta in presets.items():
+            console.print(f"    [cyan]{key}[/cyan] — {meta['display_name']}")
+    console.print("  [dim]Enter a preset key above, or press Enter to input manually.[/dim]")
+    preset_choice = Prompt.ask("  Load regional preset", default="manual")
+
+    defaults: dict = {}
+    if preset_choice in all_preset_keys:
+        for state, presets in REGION_SOIL_PRESETS.items():
+            if preset_choice in presets:
+                defaults = presets[preset_choice]
+                break
+        console.print(
+            f"  [green]✓[/green] Loaded preset: [bold]{defaults['display_name']}[/bold]"
+        )
+        console.print("  [dim](You may still override individual values below.)[/dim]")
+
     textures = list(SOIL_TEXTURES.keys())
-    ph   = FloatPrompt.ask("  Soil pH", default=6.5)
-    n    = FloatPrompt.ask("  Nitrogen (kg/ha)", default=80.0)
-    p    = FloatPrompt.ask("  Phosphorus (kg/ha)", default=30.0)
-    k    = FloatPrompt.ask("  Potassium (kg/ha)", default=120.0)
-    om   = FloatPrompt.ask("  Organic matter (%)", default=1.5)
+    ph  = FloatPrompt.ask("  Soil pH",               default=float(defaults.get("ph", 6.5)))
+    n   = FloatPrompt.ask("  Nitrogen (kg/ha)",       default=float(defaults.get("nitrogen_kg_ha", 80.0)))
+    p   = FloatPrompt.ask("  Phosphorus (kg/ha)",     default=float(defaults.get("phosphorus_kg_ha", 30.0)))
+    k   = FloatPrompt.ask("  Potassium (kg/ha)",      default=float(defaults.get("potassium_kg_ha", 120.0)))
+    om  = FloatPrompt.ask("  Organic matter (%)",     default=float(defaults.get("organic_matter_pct", 1.5)))
     console.print(f"  Soil textures: {', '.join(textures)}")
-    tex  = Prompt.ask("  Soil texture", choices=textures, default="loam")
+    tex = Prompt.ask(
+        "  Soil texture",
+        choices=textures,
+        default=str(defaults.get("texture", "loam")),
+    )
     return SoilState(ph=ph, nitrogen_kg_ha=n, phosphorus_kg_ha=p,
                      potassium_kg_ha=k, organic_matter_pct=om, texture=tex)
 

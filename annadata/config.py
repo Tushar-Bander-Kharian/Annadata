@@ -147,3 +147,57 @@ IRRIGATION_MM_PER_WEEK: dict[str, float] = {
 }
 
 OPTIMAL_RADIATION_MJ_PER_WEEK: float = 140.0
+
+# ---------------------------------------------------------------------------
+# Regional soil presets — measured field data from peer-reviewed theses
+# ---------------------------------------------------------------------------
+# Punjab presets derived from:
+#   Sravanthi (2022), M.Sc. Thesis, PAU Ludhiana — 340 samples across 3 districts
+#   Mondal (2017), Ph.D. Thesis, PAU Ludhiana — Ladian village rice-wheat system
+#
+# Parameter notes:
+#   ph              — 1:2.5 water suspension method
+#   ec_ds_m         — electrical conductivity of saturation extract (dS/m)
+#   nitrogen_kg_ha  — mineral N (0-30 cm), estimated from KCl-N (mg/kg) × 4.2
+#   phosphorus_kg_ha— Olsen-P (0.5 M NaHCO₃ extract), kg/ha
+#   potassium_kg_ha — NH₄OAc extractable K, kg/ha
+#   organic_matter  — SOC% × 1.724 Van Bemmelen factor
+# ---------------------------------------------------------------------------
+
+PUNJAB_SOIL_PRESETS: dict[str, dict] = {
+    "punjab_mansa": {
+        "display_name": "Punjab - Mansa district (loamy sand, Malwa agro-zone)",
+        "texture": "sandy_loam",      # loamy sand → nearest model class
+        "ph": 8.46,                   # alkaline, CaCO₃-bearing alluvium
+        "ec_ds_m": 0.37,
+        "nitrogen_kg_ha": 55.0,       # low; sparse OM, rapid N leaching
+        "phosphorus_kg_ha": 32.5,     # Olsen-P, low-medium
+        "potassium_kg_ha": 443.9,     # adequate
+        "organic_matter_pct": 0.52,   # SOC 0.30 % × 1.724
+    },
+    "punjab_ludhiana": {
+        "display_name": "Punjab - Ludhiana district (sandy loam, rice-wheat zone)",
+        "texture": "sandy_loam",
+        "ph": 7.69,                   # near-neutral, long-term rice-wheat
+        "ec_ds_m": 0.26,
+        "nitrogen_kg_ha": 90.0,       # Mondal (2017): KCl-N 87 mg/kg → ~87×1.02≈89
+        "phosphorus_kg_ha": 48.9,     # Olsen-P, medium
+        "potassium_kg_ha": 374.5,     # adequate
+        "organic_matter_pct": 1.00,   # SOC 0.58 % × 1.724
+    },
+    "punjab_patiala": {
+        "display_name": "Punjab - Patiala district (loam, Majha-Doaba transition)",
+        "texture": "loam",
+        "ph": 7.71,
+        "ec_ds_m": 0.54,              # slightly higher EC, older alluvium
+        "nitrogen_kg_ha": 75.0,       # medium; good OM but heavier texture
+        "phosphorus_kg_ha": 115.4,    # Olsen-P, high (long-term P build-up)
+        "potassium_kg_ha": 493.0,     # high
+        "organic_matter_pct": 0.93,   # SOC 0.54 % × 1.724
+    },
+}
+
+# Master index — extend with other states as data is collected
+REGION_SOIL_PRESETS: dict[str, dict[str, dict]] = {
+    "Punjab": PUNJAB_SOIL_PRESETS,
+}
