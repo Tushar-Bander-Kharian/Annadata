@@ -1,0 +1,1086 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Annadata v2 — Crop Yield Potential Simulator</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+:root {
+  --bg:#0e1117; --surface:#161b27; --surface2:#1e2535; --surface3:#242d3e;
+  --border:#2a3347; --accent:#4ade80; --accent2:#f59e0b; --accent3:#60a5fa;
+  --text:#e2e8f0; --muted:#64748b; --muted2:#94a3b8;
+  --danger:#ef4444; --warn:#f59e0b; --ok:#22c55e;
+  --font:'JetBrains Mono','Fira Code',Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:13px;line-height:1.6;min-height:100vh}
+.app{display:grid;grid-template-columns:250px 1fr;grid-template-rows:48px 1fr;height:100vh;overflow:hidden}
+.topbar{grid-column:1/-1;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:14px;z-index:10}
+.logo{color:var(--accent);font-size:15px;font-weight:700;letter-spacing:3px}
+.logo-sub{color:var(--muted);font-size:10px}
+.topbar-right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.status-pill{display:flex;align-items:center;gap:6px;padding:5px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:20px;font-size:11px;color:var(--muted2)}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--muted)}
+.dot.active{background:var(--accent);animation:pulse 1.4s infinite}
+.dot.error{background:var(--danger)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* sidebar */
+.sidebar{background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;padding:8px 0}
+.nav-group{font-size:9px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;padding:10px 16px 4px;margin-top:4px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:9px 16px;cursor:pointer;color:var(--muted2);font-size:12px;border-left:2px solid transparent;transition:all .15s}
+.nav-item:hover{background:var(--surface2);color:var(--text)}
+.nav-item.active{background:var(--surface2);color:var(--accent);border-left-color:var(--accent)}
+.nav-icon{font-size:13px;width:14px;text-align:center}
+
+/* main */
+.main{overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:16px}
+.section{display:none;flex-direction:column;gap:16px}
+.section.active{display:flex}
+
+/* panels */
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:18px}
+.panel-title{font-size:10px;color:var(--accent);letter-spacing:2px;text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.panel-title::before{content:'';display:inline-block;width:3px;height:13px;background:var(--accent);border-radius:2px}
+
+/* forms */
+.fg2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.fg3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.fg4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:10px;color:var(--muted2);letter-spacing:1px;text-transform:uppercase}
+.field input,.field select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:7px 10px;border-radius:5px;font-family:var(--font);font-size:12px;width:100%;outline:none;transition:border-color .15s}
+.field input:focus,.field select:focus{border-color:var(--accent)}
+.field select option{background:var(--surface2)}
+
+/* sliders */
+.sg{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.sl-row{display:flex;flex-direction:column;gap:5px}
+.sl-head{display:flex;justify-content:space-between;align-items:center}
+.sl-lbl{font-size:11px;color:var(--muted2)}
+.sl-val{font-size:12px;font-weight:700;min-width:32px;text-align:right}
+.sl-val.v0{color:var(--ok)}.sl-val.vl{color:#86efac}.sl-val.vm{color:var(--warn)}.sl-val.vh{color:var(--danger)}
+input[type=range]{width:100%;height:4px;-webkit-appearance:none;background:var(--border);border-radius:2px;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer}
+.sl-heat::-webkit-slider-thumb{background:#ef4444!important}
+.sl-drought::-webkit-slider-thumb{background:#f59e0b!important}
+.sl-disease::-webkit-slider-thumb{background:#a855f7!important}
+.sl-weed::-webkit-slider-thumb{background:#22c55e!important}
+.sl-insect::-webkit-slider-thumb{background:#f97316!important}
+.sl-nutrient::-webkit-slider-thumb{background:#60a5fa!important}
+
+/* buttons */
+.btn{background:transparent;border:1px solid var(--border);color:var(--text);padding:8px 15px;border-radius:5px;cursor:pointer;font-family:var(--font);font-size:12px;display:inline-flex;align-items:center;gap:6px;transition:all .15s;white-space:nowrap}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.btn-primary{background:var(--accent);color:#000;border-color:var(--accent);font-weight:700}
+.btn-primary:hover{background:#86efac}
+.btn-primary:disabled{background:var(--muted);border-color:var(--muted);cursor:not-allowed}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
+/* badges */
+.badge{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700}
+.b-ok{background:#14532d;color:#4ade80}.b-warn{background:#451a03;color:#fbbf24}
+.b-danger{background:#450a0a;color:#f87171}.b-info{background:#172554;color:#93c5fd}
+.b-purple{background:#2e1065;color:#c4b5fd}
+
+/* risk bar */
+.rbar-wrap{display:flex;align-items:center;gap:6px;min-width:80px}
+.rbar{flex:1;height:4px;background:var(--border);border-radius:2px;overflow:hidden}
+.rbar-fill{height:100%;border-radius:2px}
+
+/* intel grid */
+.intel-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.icard{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:12px}
+.icard-title{font-size:9px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px}
+.irow{display:flex;justify-content:space-between;align-items:flex-start;padding:4px 0;border-bottom:1px solid var(--border);font-size:11px;gap:8px}
+.irow:last-child{border-bottom:none}
+.ik{color:var(--muted2);flex:1}
+.iv{color:var(--text);text-align:right;max-width:55%}
+
+/* variety card */
+.vcard{background:var(--surface2);border:1px solid var(--accent);border-radius:6px;padding:14px;margin-top:14px;display:none}
+.vcard.show{display:block}
+.vcard-name{color:var(--accent);font-size:13px;font-weight:700;margin-bottom:6px}
+.vcard-tags{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.vtag{font-size:10px;background:var(--surface);border:1px solid var(--border);padding:2px 8px;border-radius:10px;color:var(--muted2)}
+.mod-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:8px}
+.mod-box{text-align:center;background:var(--surface);border:1px solid var(--border);border-radius:5px;padding:6px}
+.mod-val{font-size:12px;font-weight:700}
+.mod-lbl{font-size:9px;color:var(--muted);margin-top:1px}
+
+/* results */
+.yield-hero{background:linear-gradient(135deg,#0f2d1a,#172a1f);border:1px solid var(--accent);border-radius:8px;padding:24px;text-align:center}
+.yield-num{font-size:52px;font-weight:700;color:var(--accent);line-height:1}
+.yield-unit{font-size:16px;color:var(--muted2)}
+.yield-gap{font-size:13px;color:var(--warn);margin-top:4px}
+.yield-meta{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:14px}
+.mbox{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center}
+.mval{font-size:18px;font-weight:700;color:var(--accent3)}
+.mlbl{font-size:9px;color:var(--muted);margin-top:2px;letter-spacing:1px;text-transform:uppercase}
+
+/* limiting factors */
+.lim-row{display:flex;align-items:center;gap:10px;margin-bottom:7px}
+.lim-name{width:150px;font-size:11px;color:var(--muted2);flex-shrink:0}
+.lim-track{flex:1;height:5px;background:var(--surface2);border-radius:3px;overflow:hidden}
+.lim-fill{height:100%;border-radius:3px;transition:width .8s ease}
+.lim-score{width:38px;text-align:right;font-size:11px}
+
+/* chart wrapper */
+.cwrap{position:relative;height:260px}
+.cwrap-sm{position:relative;height:200px}
+
+/* alerts */
+.alert-item{border-left:3px solid var(--warn);padding:8px 12px;border-radius:0 5px 5px 0;background:var(--surface2);font-size:11px;color:var(--muted2);margin-bottom:6px}
+.alert-item.crit{border-left-color:var(--danger)}
+
+/* AI report */
+.report-box{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:16px;min-height:120px;font-size:12px;line-height:1.9;color:var(--muted2);white-space:pre-wrap}
+.report-box.streaming::after{content:'▋';color:var(--accent);animation:blink .7s infinite}
+@keyframes blink{50%{opacity:0}}
+
+/* disease sliders */
+.dis-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.dis-item{background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:10px}
+.dis-name{font-size:10px;color:var(--muted2);margin-bottom:6px}
+
+/* tab progress */
+.tab-prog{display:flex;gap:3px;height:2px;margin-bottom:14px}
+.tab-seg{flex:1;height:2px;border-radius:1px;background:var(--border)}
+.tab-seg.done{background:var(--accent)}.tab-seg.cur{background:var(--accent2)}
+
+/* scrollbar */
+::-webkit-scrollbar{width:4px;height:4px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+/* tooltip */
+[tip]{position:relative;cursor:help;border-bottom:1px dashed var(--muted)}
+[tip]::after{content:attr(tip);position:absolute;bottom:130%;left:50%;transform:translateX(-50%);background:var(--surface3);color:var(--text);padding:5px 10px;border-radius:4px;font-size:10px;pointer-events:none;opacity:0;transition:opacity .15s;z-index:99;border:1px solid var(--border);min-width:160px;max-width:260px;white-space:normal;line-height:1.5}
+[tip]:hover::after{opacity:1}
+
+@media(max-width:800px){
+  .app{grid-template-columns:1fr}
+  .sidebar{display:none}
+  .fg2,.fg3,.fg4,.intel-grid,.dis-grid,.sg{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- TOP BAR -->
+<header class="topbar">
+  <div class="logo">ANNADATA</div>
+  <div class="logo-sub">crop yield potential simulator v2</div>
+  <div class="topbar-right">
+    <div class="status-pill">
+      <div class="dot" id="dot"></div>
+      <span id="status-txt">ready</span>
+    </div>
+  </div>
+</header>
+
+<!-- SIDEBAR -->
+<nav class="sidebar">
+  <div class="nav-group">simulation</div>
+  <div class="nav-item active" onclick="nav('setup')"><span class="nav-icon">⚙</span>Setup</div>
+  <div class="nav-item" onclick="nav('location');loadIntel()"><span class="nav-icon">◎</span>Location Intel</div>
+  <div class="nav-item" onclick="nav('stresses')"><span class="nav-icon">⚡</span>Stress Controls</div>
+  <div class="nav-item" onclick="nav('fertility')"><span class="nav-icon">◈</span>Soil &amp; Fertility</div>
+  <div class="nav-group">output</div>
+  <div class="nav-item" onclick="nav('results')"><span class="nav-icon">▣</span>Results</div>
+  <div class="nav-item" onclick="nav('ai')"><span class="nav-icon">◆</span>AI Agronomist</div>
+  <div class="nav-group">reference</div>
+  <div class="nav-item" onclick="nav('varref');loadVarietyCards()"><span class="nav-icon">◇</span>Variety Cards</div>
+</nav>
+
+<!-- MAIN -->
+<main class="main">
+
+<!-- ═══════════════════════════ SETUP ═══════════════════════════ -->
+<div class="section active" id="s-setup">
+  <div class="tab-prog"><div class="tab-seg cur"></div><div class="tab-seg"></div><div class="tab-seg"></div><div class="tab-seg"></div></div>
+
+  <div class="panel">
+    <div class="panel-title">Crop &amp; Variety</div>
+    <div class="fg2">
+      <div class="field"><label>Crop</label>
+        <select id="sel-crop" onchange="onCrop()">
+          <option value="wheat">Wheat (Triticum aestivum)</option>
+          <option value="rice">Rice (Oryza sativa)</option>
+          <option value="maize">Maize (Zea mays)</option>
+          <option value="soybean">Soybean (Glycine max)</option>
+          <option value="chickpea">Chickpea (Cicer arietinum)</option>
+          <option value="mustard">Mustard (Brassica juncea)</option>
+          <option value="cotton">Cotton (Gossypium hirsutum)</option>
+          <option value="tomato">Tomato (Solanum lycopersicum)</option>
+          <option value="potato">Potato (Solanum tuberosum)</option>
+        </select>
+      </div>
+      <div class="field"><label>Named Variety (ICAR / CIMMYT)</label>
+        <select id="sel-variety" onchange="showVarietyCard()">
+          <option value="">— Generic / custom variety —</option>
+        </select>
+      </div>
+      <div class="field"><label>Custom Label (if no named variety)</label>
+        <input type="text" id="inp-vlabel" placeholder="e.g. Local check, Farmer-saved seed">
+      </div>
+      <div class="field"><label>Sowing Date</label>
+        <input type="date" id="inp-sow" value="2024-11-01">
+      </div>
+    </div>
+
+    <!-- Variety info card -->
+    <div class="vcard" id="vcard">
+      <div class="vcard-name" id="vc-name"></div>
+      <div class="vcard-tags" id="vc-tags"></div>
+      <div style="font-size:10px;color:var(--muted);margin-bottom:8px" id="vc-notes"></div>
+      <div style="font-size:9px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:6px">Stress tolerance modifiers (1.0 = susceptible, &lt;1.0 = tolerant)</div>
+      <div class="mod-grid" id="vc-mods"></div>
+      <div style="font-size:9px;color:var(--muted2);margin-top:10px" id="vc-resistance"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Location</div>
+    <div class="fg2">
+      <div class="field"><label>State / UT</label>
+        <select id="sel-state" onchange="onState()">
+          <option value="">— Select State —</option>
+        </select>
+      </div>
+      <div class="field"><label>City / District (for weather data)</label>
+        <input type="text" id="inp-loc" placeholder="e.g. Ludhiana, Nagpur, Guntur" value="Ludhiana">
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">LLM Backend</div>
+    <div class="fg2">
+      <div class="field"><label>Backend</label>
+        <select id="sel-backend">
+          <option value="claude">Claude (Anthropic)</option>
+          <option value="grok">Grok (xAI)</option>
+          <option value="ollama">Ollama (local)</option>
+        </select>
+      </div>
+      <div class="field"><label>Model Override (optional)</label>
+        <input type="text" id="inp-model" placeholder="e.g. claude-sonnet-4-6, qwen2.5:7b">
+      </div>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="nav('location');loadIntel()">Next: Location Intel →</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ LOCATION ═══════════════════════════ -->
+<div class="section" id="s-location">
+  <div class="tab-prog"><div class="tab-seg done"></div><div class="tab-seg cur"></div><div class="tab-seg"></div><div class="tab-seg"></div></div>
+  <div id="intel-container">
+    <div class="panel" style="text-align:center;padding:40px;color:var(--muted)">
+      Select a State in Setup, then click "Location Intel" in the sidebar.
+    </div>
+  </div>
+  <div class="btn-row">
+    <button class="btn" onclick="nav('setup')">← Back</button>
+    <button class="btn btn-primary" onclick="nav('stresses')">Next: Stress Controls →</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ STRESSES ═══════════════════════════ -->
+<div class="section" id="s-stresses">
+  <div class="tab-prog"><div class="tab-seg done"></div><div class="tab-seg done"></div><div class="tab-seg cur"></div><div class="tab-seg"></div></div>
+
+  <div class="panel">
+    <div class="panel-title">Abiotic Stress Overrides
+      <span style="font-size:10px;color:var(--muted);font-weight:normal;text-transform:none;letter-spacing:0">0 = none · 0.5 = moderate · 1.0 = severe/lethal</span>
+    </div>
+    <div class="sg">
+      <div class="sl-row">
+        <div class="sl-head">
+          <span class="sl-lbl" tip="Extra heat beyond weather data. Affects pollen sterility &amp; grain filling. Sigmoid response — accelerates above 0.5.">🌡 Heat Stress</span>
+          <span class="sl-val v0" id="lv-heat">0.00</span>
+        </div>
+        <input type="range" class="sl-heat" id="sl-heat" min="0" max="1" step="0.05" value="0" oninput="sl('heat')">
+      </div>
+      <div class="sl-row">
+        <div class="sl-head">
+          <span class="sl-lbl" tip="Water deficit. 0=irrigation adequate; 1=wilting/crop failure. Daryanto 2016: wheat −21%, maize −39%, rice −51% at severe drought.">💧 Drought / Water Deficit</span>
+          <span class="sl-val v0" id="lv-drought">0.00</span>
+        </div>
+        <input type="range" class="sl-drought" id="sl-drought" min="0" max="1" step="0.05" value="0" oninput="sl('drought')">
+      </div>
+      <div class="sl-row">
+        <div class="sl-head">
+          <span class="sl-lbl" tip="Standing water / poor drainage. Wheat loses 20–35% at anthesis. Maize very sensitive (−48%).">🌊 Waterlogging / Flooding</span>
+          <span class="sl-val v0" id="lv-waterlogging">0.00</span>
+        </div>
+        <input type="range" id="sl-waterlogging" min="0" max="1" step="0.05" value="0" oninput="sl('waterlogging')">
+      </div>
+      <div class="sl-row">
+        <div class="sl-head">
+          <span class="sl-lbl" tip="EC above crop threshold (FAO-29 linear model). Cotton tolerant; rice &amp; chickpea sensitive.">⬡ Salinity (EC above threshold)</span>
+          <span class="sl-val v0" id="lv-salinity">0.00</span>
+        </div>
+        <input type="range" id="sl-salinity" min="0" max="1" step="0.05" value="0" oninput="sl('salinity')">
+      </div>
+      <div class="sl-row">
+        <div class="sl-head">
+          <span class="sl-lbl" tip="Chilling or frost. Critical for rice at anthesis (&lt;17°C), maize seedlings (&lt;10°C).">❄ Cold / Chilling Stress</span>
+          <span class="sl-val v0" id="lv-cold">0.00</span>
+        </div>
+        <input type="range" id="sl-cold" min="0" max="1" step="0.05" value="0" oninput="sl('cold')">
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Biotic Stress Controls</div>
+    <div class="sg" style="margin-bottom:14px">
+      <div class="sl-row">
+        <div class="sl-head">
+          <span class="sl-lbl" tip="Weed competition level. HR weed factor from location intelligence auto-applied on top. P. minor uncontrolled = 20–40% wheat loss.">🌿 Weed Competition</span>
+          <span class="sl-val vl" id="lv-weed">0.30</span>
+        </div>
+        <input type="range" class="sl-weed" id="sl-weed" min="0" max="1" step="0.05" value="0.30" oninput="sl('weed')">
+      </div>
+      <div class="sl-row">
+        <div class="sl-head">
+          <span class="sl-lbl" tip="Overall insect/pest pressure. Includes stem borers, BPH, aphids, bollworms, FAW.">🐛 Insect / Pest Pressure</span>
+          <span class="sl-val vl" id="lv-insect">0.20</span>
+        </div>
+        <input type="range" class="sl-insect" id="sl-insect" min="0" max="1" step="0.05" value="0.20" oninput="sl('insect')">
+      </div>
+    </div>
+
+    <div style="font-size:9px;color:var(--muted);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px">
+      Disease Severities — modulated by real-time weather (T × RH interaction)
+    </div>
+    <div class="dis-grid" id="dis-sliders">
+      <div style="color:var(--muted);font-size:11px;padding:10px">Select a crop to load disease list.</div>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn" onclick="nav('location')">← Back</button>
+    <button class="btn" onclick="resetStresses()">↺ Reset all to zero</button>
+    <button class="btn btn-primary" onclick="nav('fertility')">Next: Soil &amp; Fertility →</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ FERTILITY ═══════════════════════════ -->
+<div class="section" id="s-fertility">
+  <div class="tab-prog"><div class="tab-seg done"></div><div class="tab-seg done"></div><div class="tab-seg done"></div><div class="tab-seg cur"></div></div>
+
+  <div class="panel">
+    <div class="panel-title">Soil Parameters</div>
+    <div class="fg3">
+      <div class="field"><label>Texture</label>
+        <select id="sel-tex">
+          <option value="sandy">Sandy</option>
+          <option value="sandy_loam">Sandy Loam</option>
+          <option value="loam" selected>Loam</option>
+          <option value="clay_loam">Clay Loam</option>
+          <option value="clay">Clay</option>
+        </select>
+      </div>
+      <div class="field"><label>pH</label>
+        <input type="number" id="inp-ph" value="7.5" min="4" max="10" step="0.1">
+      </div>
+      <div class="field"><label>EC (dS/m)</label>
+        <input type="number" id="inp-ec-soil" value="0.40" min="0" max="15" step="0.1">
+      </div>
+      <div class="field"><label>N available (kg/ha)</label>
+        <input type="number" id="inp-n" value="90" min="0" max="400">
+      </div>
+      <div class="field"><label>P available (kg/ha)</label>
+        <input type="number" id="inp-p" value="30" min="0" max="200">
+      </div>
+      <div class="field"><label>K available (kg/ha)</label>
+        <input type="number" id="inp-k" value="200" min="0" max="600">
+      </div>
+      <div class="field"><label>Organic Matter (%)</label>
+        <input type="number" id="inp-om" value="0.7" min="0" max="10" step="0.1">
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Nutrient Deficiency Stress
+      <span style="font-size:10px;color:var(--muted);font-weight:normal;text-transform:none;letter-spacing:0">beyond what soil NPK data captures (e.g. P fixation, K leaching)</span>
+    </div>
+    <div class="sg">
+      <div class="sl-row">
+        <div class="sl-head">
+          <span class="sl-lbl" tip="N deficiency severity. Liebig minimum — N, P, K Zn compete; worst limits yield.">N — Nitrogen deficiency</span>
+          <span class="sl-val v0" id="lv-n_def">0.00</span>
+        </div>
+        <input type="range" class="sl-nutrient" id="sl-n_def" min="0" max="1" step="0.05" value="0" oninput="sl2('n_def')">
+      </div>
+      <div class="sl-row">
+        <div class="sl-head">
+          <span class="sl-lbl" tip="P fixation in alkaline/acid soils. Widespread in India — 36–49% soils deficient.">P — Phosphorus deficiency</span>
+          <span class="sl-val v0" id="lv-p_def">0.00</span>
+        </div>
+        <input type="range" class="sl-nutrient" id="sl-p_def" min="0" max="1" step="0.05" value="0" oninput="sl2('p_def')">
+      </div>
+      <div class="sl-row">
+        <div class="sl-head">
+          <span class="sl-lbl" tip="K depletion under intensive rice-wheat cropping. NPK ratio India 2023: 10.9:4.4:1.">K — Potassium deficiency</span>
+          <span class="sl-val v0" id="lv-k_def">0.00</span>
+        </div>
+        <input type="range" class="sl-nutrient" id="sl-k_def" min="0" max="1" step="0.05" value="0" oninput="sl2('k_def')">
+      </div>
+      <div class="sl-row">
+        <div class="sl-head">
+          <span class="sl-lbl" tip="Zn micronutrient deficiency. Affects 36–49% of Indian cultivated land. Alkaline IGP soils highest risk.">Zn — Zinc deficiency</span>
+          <span class="sl-val v0" id="lv-zinc">0.00</span>
+        </div>
+        <input type="range" class="sl-nutrient" id="sl-zinc" min="0" max="1" step="0.05" value="0" oninput="sl2('zinc')">
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title">Irrigation Water</div>
+    <div class="fg3">
+      <div class="field"><label>Method</label>
+        <select id="sel-irr">
+          <option value="rainfed">Rainfed</option>
+          <option value="flood">Flood</option>
+          <option value="furrow">Furrow</option>
+          <option value="sprinkler">Sprinkler</option>
+          <option value="drip">Drip</option>
+          <option value="tube-well" selected>Tube-well</option>
+        </select>
+      </div>
+      <div class="field"><label>Water EC (dS/m)</label>
+        <input type="number" id="inp-ec-w" value="0.4" min="0" max="10" step="0.1">
+      </div>
+      <div class="field"><label>Water pH</label>
+        <input type="number" id="inp-ph-w" value="7.5" min="5" max="10" step="0.1">
+      </div>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn" onclick="nav('stresses')">← Back</button>
+    <button class="btn btn-primary" id="btn-run" onclick="runSim()">▶ Run Simulation</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ RESULTS ═══════════════════════════ -->
+<div class="section" id="s-results">
+  <div id="res-empty" style="text-align:center;padding:60px;color:var(--muted)">
+    Run a simulation to see results here.
+  </div>
+  <div id="res-content" style="display:none;flex-direction:column;gap:16px">
+
+    <div class="yield-hero">
+      <div><span class="yield-num" id="r-yield">—</span> <span class="yield-unit">t/ha</span></div>
+      <div class="yield-gap" id="r-gap">—</div>
+      <div class="yield-meta">
+        <div class="mbox"><div class="mval" id="r-pot">—</div><div class="mlbl">Potential Yield (t/ha)</div></div>
+        <div class="mbox"><div class="mval" id="r-var" style="font-size:13px">—</div><div class="mlbl">Variety</div></div>
+        <div class="mbox"><div class="mval" id="r-wks">—</div><div class="mlbl">Season Weeks</div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Limiting Factors</div>
+      <div id="lim-bars"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Weekly Combined Stress Factor</div>
+      <div class="cwrap"><canvas id="ch-weekly" role="img" aria-label="Weekly combined stress factor through the growing season. 1.0 = optimal, 0.0 = failure."></canvas></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Factor Components — Season Average</div>
+      <div class="cwrap-sm"><canvas id="ch-factors" role="img" aria-label="Bar chart of average stress factor values per component. Lower bar = greater stress."></canvas></div>
+    </div>
+
+    <div class="panel" id="panel-alerts" style="display:none">
+      <div class="panel-title">Agronomic Alerts</div>
+      <div id="alert-list"></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="nav('ai');genReport()">◆ Generate AI Agronomist Report →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ AI AGRONOMIST ═══════════════════════════ -->
+<div class="section" id="s-ai">
+  <div class="panel">
+    <div class="panel-title">AI Agronomist Advisory</div>
+    <div class="btn-row" style="margin-bottom:12px">
+      <button class="btn btn-primary" onclick="genReport()">▶ Generate / Regenerate</button>
+    </div>
+    <div class="report-box" id="report-box">Run a simulation first, then click Generate.</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ VARIETY CARDS ═══════════════════════════ -->
+<div class="section" id="s-varref">
+  <div class="panel">
+    <div class="panel-title">ICAR / CIMMYT Variety Reference</div>
+    <div style="max-width:280px;margin-bottom:14px">
+      <div class="field"><label>Crop</label>
+        <select id="sel-vcrop" onchange="loadVarietyCards()">
+          <option value="wheat">Wheat</option><option value="rice">Rice</option>
+          <option value="maize">Maize</option><option value="soybean">Soybean</option>
+          <option value="chickpea">Chickpea</option><option value="mustard">Mustard</option>
+          <option value="tomato">Tomato</option><option value="potato">Potato</option>
+        </select>
+      </div>
+    </div>
+    <div id="vcards-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px"></div>
+  </div>
+</div>
+
+</main>
+</div>
+
+<script>
+// ═══════════ STATE ════════════
+const S = {
+  crop:'wheat', varieties:[], disKeys:[],
+  intel:null, lastResult:null,
+  charts:{},
+};
+
+// ═══════════ NAV ════════════
+function nav(id){
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  document.getElementById('s-'+id).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n=>{
+    if(n.getAttribute('onclick')&&n.getAttribute('onclick').includes("'"+id+"'"))
+      n.classList.add('active');
+  });
+}
+
+// ═══════════ STATUS ════════════
+function setStatus(txt,type=''){
+  document.getElementById('status-txt').textContent=txt;
+  const d=document.getElementById('dot');
+  d.className='dot '+(type==='active'?'active':type==='error'?'error':'');
+}
+
+// ═══════════ INIT ════════════
+async function init(){
+  await loadStates();
+  await onCrop();
+}
+
+async function loadStates(){
+  try{
+    const r=await fetch('/api/states');
+    const states=await r.json();
+    const sel=document.getElementById('sel-state');
+    sel.innerHTML='<option value="">— Select State —</option>';
+    states.forEach(s=>{
+      const o=document.createElement('option');
+      o.value=s;o.textContent=s;sel.appendChild(o);
+    });
+  }catch(e){console.warn('states',e);}
+}
+
+// ═══════════ CROP CHANGE ════════════
+async function onCrop(){
+  S.crop=document.getElementById('sel-crop').value;
+  await loadVarieties(S.crop);
+  await loadDiseases(S.crop);
+  document.getElementById('vcard').classList.remove('show');
+}
+
+async function loadVarieties(crop){
+  try{
+    const r=await fetch('/api/varieties/'+crop);
+    S.varieties=await r.json();
+    const sel=document.getElementById('sel-variety');
+    sel.innerHTML='<option value="">— Generic / custom variety —</option>';
+    S.varieties.forEach(v=>{
+      const o=document.createElement('option');
+      o.value=v.key;
+      o.textContent=v.name+(v.release_year?' ('+v.release_year+')':'');
+      sel.appendChild(o);
+    });
+  }catch(e){console.warn('varieties',e);}
+}
+
+async function loadDiseases(crop){
+  try{
+    const r=await fetch('/api/disease-list/'+crop);
+    S.disKeys=await r.json();
+    renderDiseaseSliders();
+  }catch(e){console.warn('diseases',e);}
+}
+
+function renderDiseaseSliders(){
+  const c=document.getElementById('dis-sliders');
+  if(!S.disKeys.length){c.innerHTML='<div style="color:var(--muted);font-size:11px;padding:10px">No diseases found for this crop.</div>';return;}
+  c.innerHTML=S.disKeys.map(d=>{
+    const lbl=d.key.replace(/_/g,' ');
+    const preVal=S.intel?((S.intel.diseases.find(x=>x.disease_key===d.key)||{}).risk_level||0)*0.5:0;
+    return `<div class="dis-item">
+      <div class="dis-name">${lbl} <span style="color:var(--muted)">(max loss ${d.max_penalty_pct}%)</span></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input type="range" class="sl-disease" id="sl-d-${d.key}" min="0" max="1" step="0.05" value="${preVal.toFixed(2)}" oninput="slD('${d.key}')" style="flex:1">
+        <span class="sl-val ${svc(preVal)}" id="lv-d-${d.key}">${preVal.toFixed(2)}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ═══════════ VARIETY CARD ════════════
+function showVarietyCard(){
+  const key=document.getElementById('sel-variety').value;
+  const v=S.varieties.find(x=>x.key===key);
+  const card=document.getElementById('vcard');
+  if(!v){card.classList.remove('show');return;}
+  card.classList.add('show');
+  document.getElementById('vc-name').textContent=v.name;
+  document.getElementById('vc-notes').textContent=v.notes||'';
+  const tags=document.getElementById('vc-tags');
+  tags.innerHTML=[
+    v.release_year&&`<span class="vtag">Released: ${v.release_year}</span>`,
+    v.released_by&&`<span class="vtag">${v.released_by}</span>`,
+    `<span class="vtag">Potential: ${v.yield_potential} t/ha</span>`,
+    `<span class="vtag">Season: ${v.season_days} d</span>`,
+    v.notified_states&&v.notified_states.length&&`<span class="vtag">${v.notified_states.slice(0,3).join(', ')}${v.notified_states.length>3?'…':''}</span>`,
+  ].filter(Boolean).join('');
+
+  const mods=document.getElementById('vc-mods');
+  const mc=(val)=>val<=0.6?'color:var(--ok)':val<=0.85?'color:var(--accent2)':val>1?'color:var(--danger)':'';
+  mods.innerHTML=[['Heat',v.heat_modifier],['Drought',v.drought_modifier],
+    ['Waterlog',v.waterlogging_modifier],['Salinity',v.salinity_modifier],
+    ['Cold',v.cold_modifier]].map(([l,val])=>
+    `<div class="mod-box"><div class="mod-val" style="${mc(val)}">${(val||1).toFixed(2)}</div><div class="mod-lbl">${l}</div></div>`
+  ).join('');
+
+  if(v.disease_resistance&&Object.keys(v.disease_resistance).length){
+    document.getElementById('vc-resistance').textContent=
+      'Disease resistance: '+Object.entries(v.disease_resistance)
+        .map(([k,r])=>`${k.replace(/_/g,' ')}: ${Math.round((1-r)*100)}% resistant`).join(' · ');
+  }
+
+  // Update disease sliders based on variety resistance
+  if(v.disease_resistance){
+    Object.entries(v.disease_resistance).forEach(([k,res])=>{
+      const el=document.getElementById('sl-d-'+k);
+      if(el){el.value=(Math.min(parseFloat(el.value),res*0.8)).toFixed(2);slD(k);}
+    });
+  }
+}
+
+function onState(){
+  const s=document.getElementById('sel-state').value;
+  if(s&&!document.getElementById('inp-loc').value) document.getElementById('inp-loc').value=s;
+}
+
+// ═══════════ LOCATION INTEL ════════════
+async function loadIntel(){
+  const state=document.getElementById('sel-state').value;
+  const crop=S.crop;
+  const cont=document.getElementById('intel-container');
+  if(!state){
+    cont.innerHTML='<div class="panel" style="text-align:center;padding:40px;color:var(--muted)">Please select a State in Setup first.</div>';
+    return;
+  }
+  setStatus('loading intel…','active');
+  cont.innerHTML='<div class="panel" style="text-align:center;padding:40px;color:var(--muted)">Loading…</div>';
+  try{
+    const r=await fetch(`/api/location-intel/${encodeURIComponent(state)}/${crop}`);
+    if(!r.ok)throw new Error('Not found');
+    const d=await r.json();
+    S.intel=d;
+    cont.innerHTML=buildIntelHTML(d);
+    // Pre-fill disease sliders from location risk (×0.5 conservative)
+    if(d.diseases) d.diseases.forEach(dis=>{
+      const el=document.getElementById('sl-d-'+dis.disease_key);
+      if(el&&parseFloat(el.value)===0){el.value=(dis.risk_level*0.5).toFixed(2);slD(dis.disease_key);}
+    });
+    // Pre-fill soil
+    if(d.soil){
+      document.getElementById('inp-ph').value=((d.soil.ph_range[0]+d.soil.ph_range[1])/2).toFixed(1);
+      document.getElementById('inp-ec-soil').value=((d.soil.ec_range[0]+d.soil.ec_range[1])/2).toFixed(2);
+      document.getElementById('inp-om').value=d.soil.om_pct;
+    }
+    if(d.water){
+      document.getElementById('inp-ec-w').value=d.water.typical_ec;
+      document.getElementById('inp-ph-w').value=((d.water.ph_range[0]+d.water.ph_range[1])/2).toFixed(1);
+    }
+    setStatus('location intel loaded','');
+  }catch(e){
+    cont.innerHTML=`<div class="panel" style="color:var(--danger);padding:20px">Error: ${e.message}</div>`;
+    setStatus('error','error');
+  }
+}
+
+function rBadge(r){
+  if(r<0.3)return'<span class="badge b-ok">Low</span>';
+  if(r<0.6)return'<span class="badge b-warn">Medium</span>';
+  return'<span class="badge b-danger">High</span>';
+}
+function rBar(r){
+  const c=r<0.3?'#22c55e':r<0.6?'#f59e0b':'#ef4444';
+  return`<div class="rbar-wrap"><div class="rbar"><div class="rbar-fill" style="width:${Math.round(r*100)}%;background:${c}"></div></div><span style="font-size:10px;min-width:26px;text-align:right">${Math.round(r*100)}%</span></div>`;
+}
+function nBadge(st){
+  const m={'low':'b-danger','low-medium':'b-warn','medium':'b-ok','medium-high':'b-ok','high':'b-ok'};
+  return`<span class="badge ${m[st]||'b-info'}">${st}</span>`;
+}
+
+function buildIntelHTML(d){
+  let h=`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+    <span style="font-size:14px;font-weight:700;color:var(--text)">${d.state}</span>
+    <span class="badge b-info">${d.region}</span>
+    ${d.agronomic_notes?`<span style="font-size:10px;color:var(--muted2);max-width:600px">${d.agronomic_notes}</span>`:''}
+  </div><div class="intel-grid">`;
+
+  // Weed HR
+  h+=`<div class="icard"><div class="icard-title">⚠ Herbicide Resistance (${S.crop})</div>`;
+  if(d.weed_hr&&d.weed_hr.length){
+    d.weed_hr.forEach(w=>{h+=`<div class="irow">
+      <div class="ik"><div>${w.species}</div><div style="font-size:9px;color:var(--muted)">${w.moa}</div><div style="font-size:9px;color:var(--muted);margin-top:1px">${w.notes}</div></div>
+      <div class="iv">${rBadge(w.severity)}<div style="font-size:9px;color:var(--muted);margin-top:2px">${w.resistant_to.slice(0,3).join(', ')}${w.resistant_to.length>3?'…':''}</div></div>
+    </div>`;});
+  }else h+='<div style="color:var(--muted2);font-size:11px;padding:6px">No confirmed HR cases for this crop in this state.</div>';
+  h+='</div>';
+
+  // Diseases
+  h+=`<div class="icard"><div class="icard-title">🦠 Disease Pressure</div>`;
+  if(d.diseases&&d.diseases.length){
+    d.diseases.forEach(dis=>{h+=`<div class="irow">
+      <div class="ik">${dis.disease_key.replace(/_/g,' ')} <span style="font-size:9px;color:var(--muted)">(${dis.season})</span>
+      ${dis.notes?`<div style="font-size:9px;color:var(--muted);margin-top:1px">${dis.notes.substring(0,80)}${dis.notes.length>80?'…':''}</div>`:''}
+      </div>
+      <div class="iv">${rBar(dis.risk_level)}</div>
+    </div>`;});
+  }else h+='<div style="color:var(--muted2);font-size:11px;padding:6px">No disease data.</div>';
+  h+='</div>';
+
+  // Insects
+  h+=`<div class="icard"><div class="icard-title">🐛 Insect Pressure</div>`;
+  if(d.insects&&d.insects.length){
+    d.insects.forEach(ins=>{h+=`<div class="irow">
+      <div class="ik">${ins.pest.replace(/_/g,' ')} <span style="font-size:9px;color:var(--muted)">(${ins.season})</span>
+      ${ins.notes?`<div style="font-size:9px;color:var(--muted);margin-top:1px">${ins.notes.substring(0,70)}…</div>`:''}
+      </div>
+      <div class="iv">${rBar(ins.risk_level)}</div>
+    </div>`;});
+  }else h+='<div style="color:var(--muted2);font-size:11px;padding:6px">No insect data.</div>';
+  h+='</div>';
+
+  // Soil
+  if(d.soil){const s=d.soil;
+    h+=`<div class="icard"><div class="icard-title">🌱 Soil Fertility Status</div>
+      <div class="irow"><div class="ik">Soil type</div><div class="iv" style="font-size:10px">${s.soil_type}</div></div>
+      <div class="irow"><div class="ik">pH range</div><div class="iv">${s.ph_range[0]}–${s.ph_range[1]}</div></div>
+      <div class="irow"><div class="ik">Organic matter</div><div class="iv">${s.om_pct}%</div></div>
+      <div class="irow"><div class="ik">Nitrogen</div><div class="iv">${nBadge(s.nitrogen_status)}</div></div>
+      <div class="irow"><div class="ik">Phosphorus</div><div class="iv">${nBadge(s.phosphorus_status)}</div></div>
+      <div class="irow"><div class="ik">Potassium</div><div class="iv">${nBadge(s.potassium_status)}</div></div>
+      <div class="irow"><div class="ik">Zn deficient land</div><div class="iv">${Math.round(s.zinc_deficient_pct*100)}%</div></div>
+      <div class="irow"><div class="ik">Boron deficient</div><div class="iv">${Math.round(s.boron_deficient_pct*100)}%</div></div>
+      <div class="irow"><div class="ik">Sulphur deficient</div><div class="iv">${Math.round(s.sulphur_deficient_pct*100)}%</div></div>
+      ${s.notes?`<div style="font-size:10px;color:var(--muted);margin-top:8px;line-height:1.6">${s.notes}</div>`:''}
+    </div>`;
+  }
+
+  // Water
+  if(d.water){const w=d.water;
+    const fr=r=>`<span class="badge ${r<0.2?'b-ok':r<0.5?'b-warn':'b-danger'}">${r<0.2?'Low':r<0.5?'Moderate':'High'}</span>`;
+    h+=`<div class="icard"><div class="icard-title">💧 Irrigation Water Quality</div>
+      <div class="irow"><div class="ik">Primary source</div><div class="iv" style="font-size:10px">${w.source}</div></div>
+      <div class="irow"><div class="ik">Quality class</div><div class="iv"><span class="badge b-info">${w.quality_class}</span></div></div>
+      <div class="irow"><div class="ik">Typical EC</div><div class="iv">${w.typical_ec} dS/m</div></div>
+      <div class="irow"><div class="ik">pH range</div><div class="iv">${w.ph_range[0]}–${w.ph_range[1]}</div></div>
+      <div class="irow"><div class="ik">Fluoride risk</div><div class="iv">${fr(w.fluoride_risk)}</div></div>
+      <div class="irow"><div class="ik">Arsenic risk</div><div class="iv">${fr(w.arsenic_risk)}</div></div>
+      <div class="irow"><div class="ik">Nitrate risk</div><div class="iv">${fr(w.nitrate_risk)}</div></div>
+      <div class="irow"><div class="ik">Contaminants</div><div class="iv" style="font-size:10px">${(w.contaminants||[]).join(', ')}</div></div>
+      ${w.notes?`<div style="font-size:10px;color:var(--muted);margin-top:8px;line-height:1.6">${w.notes}</div>`:''}
+    </div>`;
+  }
+
+  h+='</div>'; // close intel-grid
+  return h;
+}
+
+// ═══════════ SLIDERS ════════════
+function svc(v){return v<0.05?'v0':v<0.35?'vl':v<0.65?'vm':'vh';}
+
+function sl(name){
+  const v=parseFloat(document.getElementById('sl-'+name).value);
+  const lbl=document.getElementById('lv-'+name);
+  lbl.textContent=v.toFixed(2); lbl.className='sl-val '+svc(v);
+}
+function sl2(name){
+  const v=parseFloat(document.getElementById('sl-'+name).value);
+  const lbl=document.getElementById('lv-'+name);
+  lbl.textContent=v.toFixed(2); lbl.className='sl-val '+svc(v);
+}
+function slD(key){
+  const v=parseFloat(document.getElementById('sl-d-'+key).value);
+  const lbl=document.getElementById('lv-d-'+key);
+  if(lbl){lbl.textContent=v.toFixed(2);lbl.className='sl-val '+svc(v);}
+}
+function resetStresses(){
+  ['heat','drought','waterlogging','salinity','cold','weed','insect'].forEach(k=>{
+    const el=document.getElementById('sl-'+k);if(el){el.value=k==='weed'?0.3:k==='insect'?0.2:0;sl(k);}
+  });
+  ['n_def','p_def','k_def','zinc'].forEach(k=>{
+    const el=document.getElementById('sl-'+k);if(el){el.value=0;sl2(k);}
+  });
+  S.disKeys.forEach(d=>{
+    const el=document.getElementById('sl-d-'+d.key);if(el){el.value=0;slD(d.key);}
+  });
+}
+
+// ═══════════ BUILD PAYLOAD ════════════
+function buildPayload(){
+  const diseaseSeverities={};
+  S.disKeys.forEach(d=>{
+    const el=document.getElementById('sl-d-'+d.key);
+    if(el&&parseFloat(el.value)>0) diseaseSeverities[d.key]=parseFloat(el.value);
+  });
+  return {
+    crop: document.getElementById('sel-crop').value,
+    variety_key: document.getElementById('sel-variety').value||null,
+    variety_label: document.getElementById('inp-vlabel').value,
+    sowing_date: document.getElementById('inp-sow').value,
+    location: document.getElementById('inp-loc').value,
+    state: document.getElementById('sel-state').value,
+    soil:{
+      texture: document.getElementById('sel-tex').value,
+      ph: parseFloat(document.getElementById('inp-ph').value),
+      ec_ds_m: parseFloat(document.getElementById('inp-ec-soil').value),
+      nitrogen_kg_ha: parseFloat(document.getElementById('inp-n').value),
+      phosphorus_kg_ha: parseFloat(document.getElementById('inp-p').value),
+      potassium_kg_ha: parseFloat(document.getElementById('inp-k').value),
+      organic_matter_pct: parseFloat(document.getElementById('inp-om').value),
+    },
+    water:{
+      method: document.getElementById('sel-irr').value,
+      ec_ds_m: parseFloat(document.getElementById('inp-ec-w').value),
+      ph: parseFloat(document.getElementById('inp-ph-w').value),
+    },
+    stress_overrides:{
+      heat: parseFloat(document.getElementById('sl-heat').value),
+      drought: parseFloat(document.getElementById('sl-drought').value),
+      waterlogging: parseFloat(document.getElementById('sl-waterlogging').value),
+      salinity: parseFloat(document.getElementById('sl-salinity').value),
+      cold: parseFloat(document.getElementById('sl-cold').value),
+      weed: parseFloat(document.getElementById('sl-weed').value),
+      insect: parseFloat(document.getElementById('sl-insect').value),
+      n_deficiency: parseFloat(document.getElementById('sl-n_def').value),
+      p_deficiency: parseFloat(document.getElementById('sl-p_def').value),
+      k_deficiency: parseFloat(document.getElementById('sl-k_def').value),
+      zinc: parseFloat(document.getElementById('sl-zinc').value),
+      disease_severities: diseaseSeverities,
+    },
+    backend: document.getElementById('sel-backend').value,
+    model: document.getElementById('inp-model').value||null,
+  };
+}
+
+// ═══════════ RUN SIMULATION ════════════
+async function runSim(){
+  const btn=document.getElementById('btn-run');
+  btn.disabled=true; btn.textContent='⏳ Running…';
+  setStatus('simulating…','active');
+  try{
+    const payload=buildPayload();
+    const r=await fetch('/api/simulate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!r.ok){const e=await r.json();throw new Error(e.error||'Unknown error');}
+    S.lastResult=await r.json();
+    renderResults(S.lastResult);
+    nav('results');
+    setStatus('simulation complete','');
+  }catch(e){
+    setStatus('error: '+e.message,'error');
+    alert('Simulation failed: '+e.message);
+  }finally{
+    btn.disabled=false;btn.textContent='▶ Run Simulation';
+  }
+}
+
+// ═══════════ RENDER RESULTS ════════════
+function renderResults(res){
+  document.getElementById('res-empty').style.display='none';
+  const rc=document.getElementById('res-content');rc.style.display='flex';
+
+  document.getElementById('r-yield').textContent=res.simulated_yield.toFixed(2);
+  document.getElementById('r-gap').textContent=`Yield gap: ${res.yield_gap_pct.toFixed(1)}% below potential`;
+  document.getElementById('r-pot').textContent=res.potential_yield.toFixed(2);
+  document.getElementById('r-var').textContent=res.variety;
+  document.getElementById('r-wks').textContent=res.season_weeks;
+
+  // Limiting factors
+  const lim=document.getElementById('lim-bars');lim.innerHTML='';
+  res.limiting_factors.forEach(([name,avg])=>{
+    const pct=Math.round(avg*100);
+    const c=pct>75?'#22c55e':pct>55?'#f59e0b':'#ef4444';
+    lim.innerHTML+=`<div class="lim-row">
+      <div class="lim-name">${name}</div>
+      <div class="lim-track"><div class="lim-fill" style="width:${pct}%;background:${c}"></div></div>
+      <div class="lim-score" style="color:${c}">${pct}%</div>
+    </div>`;
+  });
+
+  // Charts
+  const weeks=res.weekly.map(w=>w.week);
+  const combined=res.weekly.map(w=>w.combined);
+
+  if(S.charts.weekly) S.charts.weekly.destroy();
+  S.charts.weekly=new Chart(document.getElementById('ch-weekly'),{
+    type:'line',
+    data:{
+      labels:weeks,
+      datasets:[{
+        label:'Combined factor',data:combined,
+        borderColor:'#4ade80',backgroundColor:'rgba(74,222,128,0.08)',
+        borderWidth:2,tension:0.3,pointRadius:3,pointBackgroundColor:'#4ade80',fill:true,
+      },{
+        label:'Temperature',data:res.weekly.map(w=>w.temperature),
+        borderColor:'#ef4444',backgroundColor:'transparent',borderWidth:1.5,
+        tension:0.3,pointRadius:0,borderDash:[4,3],
+      },{
+        label:'Water',data:res.weekly.map(w=>w.water),
+        borderColor:'#60a5fa',backgroundColor:'transparent',borderWidth:1.5,
+        tension:0.3,pointRadius:0,borderDash:[4,3],
+      },{
+        label:'Biotic',data:res.weekly.map(w=>w.biotic),
+        borderColor:'#a855f7',backgroundColor:'transparent',borderWidth:1.5,
+        tension:0.3,pointRadius:0,borderDash:[2,3],
+      }],
+    },
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      scales:{
+        y:{min:0,max:1.05,grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b',font:{size:10}},
+          title:{display:true,text:'factor (1.0=optimal)',color:'#64748b',font:{size:10}}},
+        x:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#64748b',font:{size:10}},
+          title:{display:true,text:'Week of season',color:'#64748b',font:{size:10}}},
+      },
+      plugins:{legend:{display:true,labels:{color:'#94a3b8',font:{size:10},boxWidth:10}}},
+    },
+  });
+
+  // Factor averages
+  const factorNames=['Temperature','Water','Salinity','pH','Nutrients','Radiation','Biotic'];
+  const factorKeys=['temperature','water','salinity','ph','nutrient','radiation','biotic'];
+  const factorAvg=factorKeys.map(k=>+(res.weekly.reduce((s,w)=>s+(w[k]||1),0)/res.weekly.length).toFixed(3));
+  const barColors=factorAvg.map(v=>v>0.75?'#22c55e':v>0.55?'#f59e0b':'#ef4444');
+
+  if(S.charts.factors) S.charts.factors.destroy();
+  S.charts.factors=new Chart(document.getElementById('ch-factors'),{
+    type:'bar',
+    data:{labels:factorNames,datasets:[{label:'Avg factor',data:factorAvg,backgroundColor:barColors,borderRadius:4}]},
+    options:{
+      responsive:true,maintainAspectRatio:false,indexAxis:'y',
+      scales:{
+        x:{min:0,max:1,grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#64748b',font:{size:10}}},
+        y:{grid:{color:'rgba(255,255,255,0.03)'},ticks:{color:'#94a3b8',font:{size:11}}},
+      },
+      plugins:{legend:{display:false}},
+    },
+  });
+
+  // Alerts
+  if(res.alerts&&res.alerts.length){
+    document.getElementById('panel-alerts').style.display='';
+    const al=document.getElementById('alert-list');
+    al.innerHTML=res.alerts.map(a=>`<div class="alert-item ${a.includes('SEVERELY')||a.includes('CRITICAL')?'crit':''}">${a}</div>`).join('');
+  }
+}
+
+// ═══════════ AI REPORT ════════════
+async function genReport(){
+  if(!S.lastResult){alert('Run a simulation first.');return;}
+  const box=document.getElementById('report-box');
+  box.textContent='';box.classList.add('streaming');
+  setStatus('generating AI report…','active');
+  try{
+    const payload={
+      simulation_summary:S.lastResult,
+      backend:document.getElementById('sel-backend').value,
+      model:document.getElementById('inp-model').value||null,
+    };
+    const r=await fetch('/api/llm-report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const reader=r.body.getReader();const dec=new TextDecoder();
+    let buf='';
+    while(true){
+      const{done,value}=await reader.read();if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split('\n');buf=lines.pop();
+      for(const line of lines){
+        if(!line.startsWith('data:'))continue;
+        try{
+          const obj=JSON.parse(line.slice(5).trim());
+          if(obj.chunk) box.textContent+=obj.chunk;
+          if(obj.done){box.classList.remove('streaming');}
+          if(obj.error) throw new Error(obj.error);
+        }catch(e2){if(e2.message!=='undefined') console.warn(e2);}
+      }
+    }
+    box.classList.remove('streaming');
+    setStatus('report ready','');
+  }catch(e){
+    box.classList.remove('streaming');
+    box.textContent='Error generating report: '+e.message;
+    setStatus('error','error');
+  }
+}
+
+// ═══════════ VARIETY REFERENCE CARDS ════════════
+async function loadVarietyCards(){
+  const crop=document.getElementById('sel-vcrop').value;
+  const grid=document.getElementById('vcards-grid');
+  grid.innerHTML='<div style="color:var(--muted);padding:20px">Loading…</div>';
+  try{
+    const r=await fetch('/api/varieties/'+crop);
+    const vars=await r.json();
+    const mc=(val)=>val<=0.6?'#4ade80':val<=0.85?'#f59e0b':val>1?'#ef4444':'#e2e8f0';
+    grid.innerHTML=vars.map(v=>`
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:14px">
+        <div style="color:var(--accent);font-weight:700;font-size:12px;margin-bottom:4px">${v.name}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+          ${v.release_year?`<span class="badge b-info">${v.release_year}</span>`:''}
+          <span class="badge b-purple">${v.yield_potential} t/ha</span>
+          <span class="badge b-ok">${v.season_days}d</span>
+        </div>
+        <div style="font-size:10px;color:var(--muted);margin-bottom:8px">${v.released_by||''}</div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-bottom:8px">
+          ${[['Heat',v.heat_modifier],['Drought',v.drought_modifier],
+             ['Waterlog',v.waterlogging_modifier],['Sal',v.salinity_modifier],
+             ['Cold',v.cold_modifier]].map(([l,val])=>`
+            <div style="text-align:center;background:var(--surface);border:1px solid var(--border);border-radius:4px;padding:4px">
+              <div style="font-size:11px;font-weight:700;color:${mc(val||1)}">${(val||1).toFixed(2)}</div>
+              <div style="font-size:8px;color:var(--muted)">${l}</div>
+            </div>`).join('')}
+        </div>
+        <div style="font-size:10px;color:var(--muted2);line-height:1.5">${v.notes||''}</div>
+        ${v.disease_resistance&&Object.keys(v.disease_resistance).length?
+          `<div style="font-size:9px;color:var(--muted);margin-top:6px">
+            Disease resistance: ${Object.entries(v.disease_resistance)
+              .map(([k,r])=>`${k.replace(/_/g,' ')} (${Math.round((1-r)*100)}%)`).join(' · ')}
+          </div>`:''}
+      </div>`).join('');
+  }catch(e){grid.innerHTML=`<div style="color:var(--danger)">Error: ${e.message}</div>`;}
+}
+
+// ═══════════ BOOT ════════════
+init();
+</script>
+</body>
+</html>
