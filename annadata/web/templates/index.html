@@ -1523,6 +1523,79 @@ async function loadVarietyCards(){
   }catch(e){grid.innerHTML=`<div style="color:var(--danger)">Error: ${e.message}</div>`;}
 }
 
+// ═══════════ SCENARIO PDF SECTION ════════════
+function buildScenarioHTML(m){
+  if(!m) return '';
+  var p=m.params||{};
+  var h='';
+  h+='<h3 style="color:#1e3a5f;font-size:11px;letter-spacing:1px;text-transform:uppercase;margin:20px 0 8px;border-bottom:2px solid #1e3a5f;padding-bottom:4px">Scenario Analysis — Monte Carlo Yield Distribution ('+m.n_runs+' Runs)</h3>';
+  h+='<div style="font-size:9px;color:#64748b;margin-bottom:8px">Perturbations: Temp ±'+(p.temp_sd||1.5)+'°C · Precip CV '+Math.round((p.precip_cv||0.2)*100)+'% · N fert SD '+(p.n_fert_sd||15)+' kg/ha · Biotic random: '+(p.pest_random?'yes':'no')+'</div>';
+
+  // Stat cards
+  var stats=[
+    ['Potential',m.potential_yield,'#166534'],
+    ['P10 (worst)',m.p10,'#b91c1c'],
+    ['P25',m.p25,'#d97706'],
+    ['Mean',m.mean,'#1d4ed8'],
+    ['Median',m.median,'#1d4ed8'],
+    ['P75',m.p75,'#059669'],
+    ['P90 (best)',m.p90,'#166534'],
+  ];
+  h+='<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:12px;text-align:center">';
+  stats.forEach(function(s){
+    h+='<div style="border:1px solid #e2e8f0;border-radius:5px;padding:7px;background:#f8fafc">';
+    h+='<div style="font-size:12px;font-weight:700;color:'+s[2]+'">'+s[1]+' t/ha</div>';
+    h+='<div style="font-size:8px;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-top:2px">'+s[0]+'</div>';
+    h+='</div>';
+  });
+  h+='</div>';
+
+  // Mini histogram
+  var ys=m.yields||[];
+  if(ys.length>1){
+    var mn=ys[0],mx=ys[ys.length-1];
+    var bw=(mx-mn)/20||0.1;
+    var bins=[];
+    for(var i=0;i<20;i++) bins.push({lo:mn+i*bw,hi:mn+(i+1)*bw,cnt:0});
+    ys.forEach(function(v){var idx=Math.min(Math.floor((v-mn)/bw),19);bins[idx].cnt++;});
+    var maxc=1;bins.forEach(function(b){if(b.cnt>maxc)maxc=b.cnt;});
+    h+='<div style="display:flex;gap:3px;align-items:flex-end;height:56px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:5px 8px;margin-bottom:4px">';
+    bins.forEach(function(b){
+      var mid=b.lo+(b.hi-b.lo)/2;
+      var ht=Math.max(2,Math.round((b.cnt/maxc)*44));
+      var c='#60a5fa';
+      if(mid<=m.p10) c='#ef4444';
+      else if(mid<=m.p25) c='#f59e0b';
+      else if(mid>=m.p90) c='#22c55e';
+      else if(mid>=m.p75) c='#4ade80';
+      h+='<div style="flex:1;height:'+ht+'px;background:'+c+';border-radius:1px;align-self:flex-end"></div>';
+    });
+    h+='</div>';
+    h+='<div style="display:flex;justify-content:space-between;font-size:8px;color:#94a3b8;margin-bottom:12px;padding:0 8px">';
+    h+='<span>'+m.min+' t/ha (min)</span><span>← yield distribution →</span><span>'+m.max+' t/ha (max)</span>';
+    h+='</div>';
+  }
+
+  // Factor sensitivity
+  var sens=m.factor_sensitivity||[];
+  if(sens.length){
+    h+='<div style="font-size:9px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px">Factor Sensitivity (season-average across all runs)</div>';
+    h+='<table style="width:100%;border-collapse:collapse">';
+    sens.forEach(function(f){
+      var pct=Math.round(f.avg*100);
+      var c=pct>80?'#166534':pct>60?'#d97706':'#b91c1c';
+      var lbl=f.factor.replace('_factor','').replace(/_/g,' ');
+      h+='<tr>';
+      h+='<td style="padding:4px 8px;font-size:10px;color:#475569">'+lbl+'</td>';
+      h+='<td style="padding:4px 8px;width:180px"><div style="background:#e2e8f0;border-radius:2px;height:5px"><div style="background:'+c+';width:'+pct+'%;height:100%;border-radius:2px"></div></div></td>';
+      h+='<td style="padding:4px 8px;font-size:10px;font-weight:700;color:'+c+'">'+pct+'%</td>';
+      h+='</tr>';
+    });
+    h+='</table>';
+  }
+  return h;
+}
+
 // ═══════════ PDF DOWNLOAD ════════════
 function downloadPDF(){
   if(!S.lastResult){alert('Run a simulation first.');return;}
@@ -1586,11 +1659,33 @@ function downloadPDF(){
     <h3 style="color:#92400e;font-size:11px;letter-spacing:1px;text-transform:uppercase;margin:20px 0 8px;border-bottom:1px solid #fef3c7;padding-bottom:4px">Agronomic Alerts</h3>
     ${alerts.map(a=>`<div style="border-left:3px solid ${a.includes('SEVERELY')||a.includes('CRITICAL')?'#b91c1c':'#d97706'};padding:6px 10px;margin-bottom:5px;background:#fffbeb;border-radius:0 4px 4px 0;font-size:11px;color:#78350f">${a}</div>`).join('')}`:'';
 
+  // Management Recommendations
+  const recs=res.recommendations||[];
+  const priorityColor={'CRITICAL':'#b91c1c','HIGH':'#d97706','MODERATE':'#1d4ed8','LOW':'#166534'};
+  const priorityBg={'CRITICAL':'#fef2f2','HIGH':'#fffbeb','MODERATE':'#eff6ff','LOW':'#f0fdf4'};
+  const recsHTML=recs.length?`
+    <h3 style="color:#1e3a5f;font-size:11px;letter-spacing:1px;text-transform:uppercase;margin:20px 0 8px;border-bottom:2px solid #1e3a5f;padding-bottom:4px">Management Recommendations to Close the Yield Gap</h3>
+    ${recs.map((r,i)=>{
+      const pc=priorityColor[r.priority]||'#334155';
+      const pb=priorityBg[r.priority]||'#f8fafc';
+      return`<div style="border:1px solid ${pc};border-left:4px solid ${pc};border-radius:4px;background:${pb};padding:10px 14px;margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px">
+          <span style="font-size:11px;font-weight:700;color:${pc}">${i+1}. ${r.factor}</span>
+          <span style="font-size:9px;font-weight:700;color:${pc};background:#fff;border:1px solid ${pc};border-radius:3px;padding:1px 5px">${r.priority}${r.gain_pct?` · +${r.gain_pct}% yield`:''}</span>
+        </div>
+        <div style="font-size:10px;color:#64748b;margin-bottom:4px;font-style:italic">${r.issue}</div>
+        <div style="font-size:11px;color:#1e293b;line-height:1.7"><strong>Action:</strong> ${r.action}</div>
+      </div>`;
+    }).join('')}`:'';
+
   // AI report
   const aiText=document.getElementById('report-box').textContent.trim();
   const aiHTML=aiText&&!aiText.startsWith('Run a simulation')?`
     <h3 style="color:#1e3a5f;font-size:11px;letter-spacing:1px;text-transform:uppercase;margin:20px 0 8px;border-bottom:1px solid #dbeafe;padding-bottom:4px">AI Agronomist Advisory</h3>
     <div style="font-size:11px;line-height:1.85;color:#334155;white-space:pre-wrap;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:14px">${aiText}</div>`:'';
+
+  // Scenario Analysis (Monte Carlo) section
+  var scenarioHTML=buildScenarioHTML(S.lastMulti);
 
   const html=`
 <div style="font-family:Georgia,serif;color:#1e293b;padding:24px 28px;max-width:820px;background:#fff">
@@ -1634,6 +1729,8 @@ function downloadPDF(){
 
   ${soilHTML}
   ${alertsHTML}
+  ${recsHTML}
+  ${scenarioHTML}
   ${aiHTML}
 
   <!-- Footer -->
@@ -1644,40 +1741,21 @@ function downloadPDF(){
 
   // Build a standalone HTML string with all styles inlined (no CSS variables)
   // so html2canvas renders it correctly regardless of the page's CSS.
-  const pdfWrap=document.createElement('div');
-  pdfWrap.style.cssText=[
-    'position:fixed','top:0','left:0','width:794px','min-height:400px',
-    'background:#fff','z-index:-9999','pointer-events:none',
-    'font-family:Georgia,serif','color:#1e293b',
-  ].join(';');
-  pdfWrap.innerHTML=html;
-  document.body.appendChild(pdfWrap);
-
-  // Allow one animation frame for the browser to lay out the element
   const fname=`annadata-${crop}-${new Date().toISOString().slice(0,10)}.pdf`;
   setStatus('generating PDF…','active');
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{
   html2pdf().set({
     margin:[10,10,10,10],
     filename:fname,
     image:{type:'jpeg',quality:0.92},
-    html2canvas:{
-      scale:2,useCORS:true,logging:false,
-      backgroundColor:'#ffffff',
-      windowWidth:794,
-      scrollX:0,scrollY:0,
-    },
+    html2canvas:{scale:2,useCORS:true,logging:false,backgroundColor:'#ffffff'},
     jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},
     pagebreak:{mode:['css','legacy']},
-  }).from(pdfWrap).save().then(()=>{
-    document.body.removeChild(pdfWrap);
+  }).from(html).save().then(()=>{
     setStatus('PDF saved','');
   }).catch(e=>{
-    document.body.removeChild(pdfWrap);
     setStatus('PDF error','error');
     console.error(e);
   });
-  })); // end requestAnimationFrame
 }
 
 // ═══════════ SCENARIO ANALYSIS (Monte Carlo) ════════════
@@ -1728,6 +1806,7 @@ async function runMulti(){
 }
 
 function renderMultiResults(d){
+  S.lastMulti=d;
   const wrap=document.getElementById('mc-results');
   wrap.style.display='flex';
 
@@ -1786,13 +1865,7 @@ function renderMultiResults(d){
       },
       plugins:{
         legend:{display:false},
-        annotation:{
-          annotations:{
-            p10:{type:'line',xMin:d.p10,xMax:d.p10,borderColor:'#ef4444',borderWidth:1.5,borderDash:[4,3],label:{content:'P10',display:true,color:'#ef4444',font:{size:9}}},
-            p90:{type:'line',xMin:d.p90,xMax:d.p90,borderColor:'#4ade80',borderWidth:1.5,borderDash:[4,3],label:{content:'P90',display:true,color:'#4ade80',font:{size:9}}},
-            mn: {type:'line',xMin:d.mean,xMax:d.mean,borderColor:'#f59e0b',borderWidth:2,borderDash:[2,2],label:{content:'Mean',display:true,color:'#f59e0b',font:{size:9}}},
-          },
-        },
+        tooltip:{callbacks:{title:function(items){return items[0].label+' t/ha';},label:function(item){return item.raw+' runs';}}},
       },
     },
   });

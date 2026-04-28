@@ -422,9 +422,9 @@ def api_simulate():
 
     # ── 8. Build weekly data for charts ─────────────────────────────────────
     weekly_rows = []
-    climate_weeks = {w.week_index: w for w in climate.weeks} if hasattr(climate, "weeks") else {}
+    climate_weeks = {w.week_number: w for w in climate.weeks} if hasattr(climate, "weeks") else {}
     for ws in result.weekly_stress:
-        cw = climate_weeks.get(ws.week - 1)
+        cw = climate_weeks.get(ws.week)
         weekly_rows.append({
             "week":         ws.week,
             "stage":        ws.stage,
@@ -443,6 +443,7 @@ def api_simulate():
     # ── 9. Limiting factor analysis ─────────────────────────────────────────
     avg_factors = _average_factors(result.weekly_stress)
     ranked = sorted(avg_factors.items(), key=lambda x: x[1])  # lowest first
+    recommendations = _build_recommendations(avg_factors, result, soil, water, crop_key)
 
     return jsonify({
         "simulated_yield":   round(result.simulated_yield_t_ha, 2),
@@ -457,7 +458,14 @@ def api_simulate():
         "weekly":            weekly_rows,
         "weekly_soil":       result.weekly_soil,
         "limiting_factors":  ranked,
+        "recommendations":   recommendations,
         "alerts":            result.alerts,
+        "soil_ph":           soil.ph,
+        "soil_ec":           soil.ec_ds_m,
+        "soil_om":           soil.organic_matter_pct,
+        "soil_n":            soil.nitrogen_kg_ha,
+        "soil_p":            soil.phosphorus_kg_ha,
+        "soil_k":            soil.potassium_kg_ha,
         "lat":               round(lat, 4),
         "lon":               round(lon, 4),
     })
@@ -466,6 +474,10 @@ def api_simulate():
 # ──────────────────────────────────────────────────────────────────────────────
 #  MULTI-RUN (MONTE CARLO) SIMULATION API
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, v))
+
 
 @app.route("/api/simulate-multi", methods=["POST"])
 def api_simulate_multi():
@@ -574,7 +586,7 @@ def api_simulate_multi():
     # ── Monte Carlo runs ──────────────────────────────────────────────────────
     yields, factor_sums = [], {k: 0.0 for k in
         ["temperature_factor","water_factor","salinity_factor",
-         "ph_factor","nutrient_factor","radiation_factor"]}
+         "ph_factor","nutrient_factor","radiation_factor","biotic_factor"]}
 
     rng = random.Random()
     for _ in range(n_runs):
@@ -692,6 +704,12 @@ def api_llm_report():
                state_str.startswith("spain_")
     region_context = "European" if eu_state else "Indian"
 
+    recs = sim.get('recommendations') or []
+    recs_text = "\n".join(
+        f"  [{r['priority']}] {r['factor']}: {r['action']} (potential gain ~{r.get('gain_pct',0)}%)"
+        for r in recs
+    ) or "  None generated."
+
     prompt = f"""You are an experienced {region_context} agronomist writing an end-of-season advisory report.
 
 SIMULATION RESULTS:
@@ -703,19 +721,27 @@ SIMULATION RESULTS:
   Potential yield: {sim.get('potential_yield','?')} t/ha
   Yield gap:       {sim.get('yield_gap_pct','?')}%
 
-TOP LIMITING FACTORS:
-{chr(10).join(f"  {n}: {v}" for n,v in (sim.get('limiting_factors') or []))}
+SOIL CONDITIONS:
+  pH: {sim.get('soil_ph','N/A')}  |  EC: {sim.get('soil_ec','N/A')} dS/m  |  OM: {sim.get('soil_om','N/A')}%
+  N: {sim.get('soil_n','N/A')} kg/ha  |  P: {sim.get('soil_p','N/A')} kg/ha  |  K: {sim.get('soil_k','N/A')} kg/ha
+
+TOP LIMITING FACTORS (season average, 1.0 = no stress):
+{chr(10).join(f"  {n}: {round(v*100)}%" for n,v in (sim.get('limiting_factors') or []))}
+
+MODEL-IDENTIFIED MANAGEMENT ACTIONS:
+{recs_text}
 
 AGRONOMIC ALERTS:
 {chr(10).join(f"  - {a}" for a in (sim.get('alerts') or ['None']))}
 
-Write a structured advisory with:
-1. SEASON SUMMARY
-2. PRIMARY CONSTRAINTS
-3. FIELD OBSERVATIONS
-4. RECOMMENDATIONS FOR NEXT SEASON (4 specific actions)
+Write a structured advisory with these exact sections:
+1. SEASON SUMMARY — 2 sentences on overall performance and dominant constraint.
+2. ROOT CAUSE ANALYSIS — explain WHY each major limiting factor occurred (link to soil, climate, management).
+3. PRIORITY MANAGEMENT PLAN — expand on the model actions above with practical rates, timings, and product names specific to {region_context} conditions. Be quantitative.
+4. VARIETY & CROP CALENDAR — recommend a better-fit variety and correct sowing window if sowing date was suboptimal.
+5. EXPECTED YIELD IMPROVEMENT — estimate achievable yield if recommendations are followed.
 
-Be practical and specific to {region_context} farming conditions."""
+Be precise, quantitative, and actionable. Avoid generic advice."""
 
     def generate():
         try:
@@ -727,7 +753,7 @@ Be practical and specific to {region_context} farming conditions."""
                     model=REPORT_MODEL,
                     system=f"You are a senior agronomist with 20 years experience in {region_context} agriculture.",
                     prompt=prompt,
-                    max_tokens=600,
+                    max_tokens=1000,
                 )
                 return resp.text
             text = asyncio.run(get_text())
@@ -825,6 +851,194 @@ def _weed_hr_factor(state: str, crop: str) -> float:
         relevant = [c.severity for c in eu.weed_hr_cases if c.crop_system == crop]
         return max(relevant, default=0.0)
     return 0.0
+
+
+# ── Crop-specific agronomic constants ────────────────────────────────────────
+
+_CROP_OPTIMAL_PH: dict[str, tuple[float, float]] = {
+    "rice": (5.5, 6.5), "wheat": (6.0, 7.5), "maize": (5.8, 7.0),
+    "soybean": (6.0, 7.0), "cotton": (6.0, 7.5), "mustard": (6.0, 7.5),
+    "chickpea": (6.0, 7.5), "potato": (5.0, 6.5), "sugarcane": (6.0, 7.5),
+    "tomato": (5.5, 7.0),
+}
+
+_CROP_SOWING_WINDOWS: dict[str, str] = {
+    "rice":     "15 Jun – 15 Jul (Kharif transplanting in NW India)",
+    "wheat":    "1 Nov – 25 Nov (Rabi sowing — IGP)",
+    "maize":    "15 Jun – 15 Jul (Kharif) or 1 Oct – 31 Oct (Rabi)",
+    "soybean":  "20 Jun – 20 Jul (Kharif)",
+    "cotton":   "1 May – 30 Jun (Kharif)",
+    "mustard":  "1 Oct – 20 Oct (Rabi)",
+    "chickpea": "15 Oct – 15 Nov (Rabi)",
+    "potato":   "15 Oct – 30 Nov (Rabi)",
+    "sugarcane":"Feb – Mar (spring planting) or Oct (autumn)",
+    "tomato":   "Jun – Aug (Kharif) or Nov – Jan (Rabi)",
+}
+
+_CROP_N_REQUIREMENT: dict[str, int] = {
+    "rice": 120, "wheat": 120, "maize": 150, "cotton": 100,
+    "soybean": 25, "chickpea": 20, "mustard": 80, "potato": 120,
+    "sugarcane": 200, "tomato": 100,
+}
+
+_CROP_N_SPLITS: dict[str, str] = {
+    "rice":  "3 splits — 1/3 basal + 1/3 at active tillering (3–4 WAT) + 1/3 at panicle initiation.",
+    "wheat": "3 splits — 1/2 basal + 1/4 at CRI (21 DAS) + 1/4 at jointing.",
+    "maize": "3 splits — 1/3 basal + 1/3 at 4-leaf stage + 1/3 at tasseling.",
+    "potato":"2 splits — 1/2 at planting + 1/2 at earthing up (30 DAP).",
+    "cotton":"3 splits — basal + squaring + boll development.",
+}
+
+_CROP_IRRIGATION: dict[str, str] = {
+    "rice":     "Maintain 5 cm standing water during vegetative stage. Use AWD (Alternate Wetting & Drying) — allow soil to dry to 15 cm below surface before re-irrigation during non-critical stages.",
+    "wheat":    "Apply 4–5 irrigations at CRI (21 DAS), tillering, jointing, flowering, and grain-fill. Skip one if weekly rainfall > 40 mm.",
+    "maize":    "Critical irrigations at knee-high, tasseling, silking, and dough stage. Never stress at silking — yield loss is irreversible.",
+    "potato":   "Maintain 60–80% field capacity. Drip irrigation preferred — also reduces late blight risk.",
+    "sugarcane":"Irrigate every 7–10 days at grand growth phase. Avoid waterlogging.",
+}
+
+_CROP_BIOTIC: dict[str, str] = {
+    "rice":    "Apply tricyclazole 75 WP @ 0.06% at tillering for blast. Carbofuran 3G @ 15 kg/ha at transplanting for stem borer. Scout for BPH weekly — spray buprofezin if > 5 hoppers/hill.",
+    "wheat":   "Apply propiconazole or tebuconazole at flag leaf for rust. Spray imidacloprid 17.8 SL @ 125 mL/ha for aphids if > 10 aphids/stem.",
+    "maize":   "Target FAW whorls with chlorpyrifos 20 EC @ 500 mL/acre or emamectin benzoate 5 WG for early instars.",
+    "potato":  "Apply mancozeb or cymoxanil+mancozeb fortnightly from 45 DAP for late blight. Use certified seed tubers.",
+    "soybean": "Spray carbendazim for yellow mosaic; use whitefly vectors control (imidacloprid seed treatment).",
+    "cotton":  "Monitor for bollworm and whitefly. Use Bt spray or spinosad for H. armigera. Spray imidacloprid for CLCV-carrying whitefly.",
+    "mustard": "Spray oxydemeton-methyl or dimethoate for aphids when > 20–25 aphids/plant at 50% flowering.",
+    "chickpea":"Apply chlorpyrifos or emamectin benzoate for pod borer at pinhead-pod stage.",
+}
+
+
+def _build_recommendations(
+    avg_factors: dict[str, float],
+    result,
+    soil,
+    water,
+    crop_key: str,
+) -> list[dict]:
+    recs: list[dict] = []
+
+    def _priority(score: float) -> str:
+        if score < 0.40: return "CRITICAL"
+        if score < 0.65: return "HIGH"
+        if score < 0.80: return "MODERATE"
+        return "LOW"
+
+    gap = result.yield_gap_pct
+
+    # ── Temperature / Sowing date ──────────────────────────────────────────
+    t = avg_factors.get("Temperature", 1.0)
+    if t < 0.80:
+        window = _CROP_SOWING_WINDOWS.get(crop_key, "as per local KVK advisory")
+        recs.append({
+            "priority": _priority(t),
+            "factor": "Sowing Date / Temperature",
+            "issue": f"Temperature factor averaged {round(t*100)}% — crop experienced severe thermal stress for most of the season.",
+            "action": f"Shift sowing to the recommended window: {window}. Correcting sowing date is the single highest-leverage action to close the yield gap.",
+            "gain_pct": min(round((1 - t) * gap * 0.65), 60),
+        })
+
+    # ── Soil pH ────────────────────────────────────────────────────────────
+    ph = avg_factors.get("Soil pH", 1.0)
+    if ph < 0.88:
+        lo, hi = _CROP_OPTIMAL_PH.get(crop_key, (6.0, 7.5))
+        soil_ph = soil.ph
+        if soil_ph > hi:
+            if crop_key == "rice":
+                action = (f"Soil pH {soil_ph:.1f} is too alkaline for rice (optimal {lo}–{hi}). "
+                          "Apply elemental sulfur @ 250–400 kg/ha before puddling, or use ammonium sulfate as primary N source. "
+                          "Sustained flooding naturally lowers rhizosphere pH by 0.5–1.5 units — maintain flood continuously.")
+            elif crop_key == "potato":
+                action = (f"Soil pH {soil_ph:.1f} is too high for potato (optimal {lo}–{hi}). "
+                          "Apply sulfur @ 200 kg/ha and use acidifying fertilisers (ammonium sulfate). Avoid liming.")
+            else:
+                action = (f"Soil pH {soil_ph:.1f} exceeds optimal ({lo}–{hi}) for {crop_key}. "
+                          "Apply gypsum @ 2–4 t/ha to improve Ca:Mg ratio; use sulfur @ 100–200 kg/ha to acidify alkaline soils. "
+                          "Prefer ammonium-based N fertilisers over urea.")
+        else:
+            action = (f"Soil pH {soil_ph:.1f} is below optimal ({lo}–{hi}) for {crop_key}. "
+                      "Apply agricultural lime (CaCO₃) @ 2–4 t/ha and incorporate 30 days before sowing.")
+        recs.append({
+            "priority": _priority(ph),
+            "factor": "Soil pH Correction",
+            "issue": f"pH factor at {round(ph*100)}% — soil pH {soil_ph:.1f} is outside the optimal range ({lo}–{hi}) for {crop_key}.",
+            "action": action,
+            "gain_pct": min(round((1 - ph) * gap * 0.50), 35),
+        })
+
+    # ── Nutrients ──────────────────────────────────────────────────────────
+    nut = avg_factors.get("Nutrients (N/P/K)", 1.0)
+    if nut < 0.88:
+        n_uptake = sum(w.get("n_uptake", 0) for w in result.weekly_soil)
+        n_leached = sum(w.get("leached_no3", 0) for w in result.weekly_soil)
+        n_req = _CROP_N_REQUIREMENT.get(crop_key, 100)
+        splits = _CROP_N_SPLITS.get(crop_key, "Apply in 2–3 splits to match crop demand curve.")
+        action = (f"N uptake was only {n_uptake:.0f} kg/ha against the recommended {n_req} kg N/ha target. "
+                  f"Apply {n_req} kg N/ha total as urea or ammonium sulfate in {splits} "
+                  f"Also apply P₂O₅ @ 60 kg/ha (basal) and K₂O @ 40 kg/ha (basal).")
+        if n_leached > 20:
+            action += f" Reduce nitrate leaching (currently {n_leached:.0f} kg N/ha lost) by splitting doses and avoiding excess irrigation after N application."
+        recs.append({
+            "priority": _priority(nut),
+            "factor": "Fertiliser Management (N/P/K)",
+            "issue": f"Nutrient factor at {round(nut*100)}% — inadequate N/P/K availability suppressing biomass and grain filling.",
+            "action": action,
+            "gain_pct": min(round((1 - nut) * gap * 0.55), 40),
+        })
+
+    # ── Water / Drought ────────────────────────────────────────────────────
+    w = avg_factors.get("Water / Drought", 1.0)
+    if w < 0.88:
+        irr = _CROP_IRRIGATION.get(crop_key, "Irrigate at critical stages (tillering, flowering, grain-fill). Never allow > 50% soil water depletion at flowering.")
+        recs.append({
+            "priority": _priority(w),
+            "factor": "Irrigation / Water Management",
+            "issue": f"Water factor at {round(w*100)}% — drought stress occurred during critical growth stages.",
+            "action": irr,
+            "gain_pct": min(round((1 - w) * gap * 0.60), 45),
+        })
+
+    # ── Salinity ────────────────────────────────────────────────────────────
+    sal = avg_factors.get("Salinity", 1.0)
+    if sal < 0.88:
+        recs.append({
+            "priority": _priority(sal),
+            "factor": "Salinity / Sodicity Remediation",
+            "issue": f"Salinity factor at {round(sal*100)}% — excess salts (irrigation EC {water.ec_ds_m:.2f} dS/m) reducing water and nutrient uptake.",
+            "action": ("Apply gypsum @ 2–5 t/ha and pre-sowing flood-leach with 2–3 irrigations to flush salts below the root zone. "
+                       "Blend tube-well water with canal water to bring irrigation EC below 1.0 dS/m. "
+                       "Consider salt-tolerant varieties (e.g., CST 7-1 for rice, KRL-210 for wheat)."),
+            "gain_pct": min(round((1 - sal) * gap * 0.50), 35),
+        })
+
+    # ── Solar Radiation ─────────────────────────────────────────────────────
+    rad = avg_factors.get("Solar Radiation", 1.0)
+    if rad < 0.82:
+        recs.append({
+            "priority": _priority(rad),
+            "factor": "Canopy & Radiation Management",
+            "issue": f"Radiation use efficiency at {round(rad*100)}% — low light interception reducing photosynthesis and dry matter accumulation.",
+            "action": ("Optimise plant geometry: for rice use 20×15 cm spacing; for wheat use 22.5 cm row spacing. "
+                       "Sow at the recommended date to align grain fill with peak solar radiation months. "
+                       "Select high-harvest-index varieties with erect leaf architecture."),
+            "gain_pct": min(round((1 - rad) * gap * 0.35), 25),
+        })
+
+    # ── Biotic ─────────────────────────────────────────────────────────────
+    bio = avg_factors.get("Biotic Stresses", 1.0)
+    if bio < 0.92:
+        biotic_action = _CROP_BIOTIC.get(crop_key, "Follow local KVK IPM schedule. Scout weekly and apply fungicide/insecticide at first sign of infestation.")
+        recs.append({
+            "priority": _priority(bio),
+            "factor": "Biotic Stress Management (Disease/Pest/Weed)",
+            "issue": f"Biotic factor at {round(bio*100)}% — disease, pest or weed pressure reducing harvestable yield.",
+            "action": biotic_action,
+            "gain_pct": min(round((1 - bio) * gap * 0.45), 30),
+        })
+
+    _pord = {"CRITICAL": 0, "HIGH": 1, "MODERATE": 2, "LOW": 3}
+    recs.sort(key=lambda r: _pord.get(r["priority"], 4))
+    return recs
 
 
 def _average_factors(weekly_stresses) -> dict[str, float]:
