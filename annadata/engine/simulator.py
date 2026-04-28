@@ -1,0 +1,310 @@
+"""Week-by-week deterministic crop yield simulator — Annadata v2."""
+from __future__ import annotations
+from typing import Optional
+
+from annadata.config import CROP_DB, SOIL_TEXTURES, IRRIGATION_MM_PER_WEEK, STAGE_WEIGHTS
+from annadata.soil import SoilColumn
+from annadata.soil.column import FertiliserEvent
+from annadata.engine.stress import (
+    temperature_factor, salinity_factor,
+    soil_ph_factor, nutrient_factor, canopy_radiation_factor,
+)
+from annadata.models.inputs import CropVariety, SoilState, WaterQuality, StressOverrides
+from annadata.models.state import WeeklyStress, SimulationResult
+from annadata.data.stress_responses import (
+    drought_penalty, heat_penalty, waterlogging_penalty, salinity_penalty,
+    cold_stress_penalty, nitrogen_penalty, phosphorus_penalty,
+    potassium_penalty, zinc_penalty, disease_penalty, weed_penalty,
+    insect_penalty, environment_disease_modifier,
+)
+
+
+def _clamp(v, lo=0.0, hi=1.0):
+    return max(lo, min(hi, v))
+
+# Gap 4: root depth (cm) grows with crop stage — shallow at germination,
+# maximum after canopy closure, held at max through grain fill.
+_ROOT_DEPTH_CM: dict[str, float] = {
+    "germination":  15.0,
+    "vegetative":   45.0,
+    "reproductive": 70.0,
+    "maturity":     80.0,
+}
+
+def _gdd_stage(acc_gdd: float, crop_info: dict) -> str:
+    """Thermal-time phenology: stage determined by accumulated GDD above T_base.
+
+    Thresholds stored in crop_info["gdd_stages"] as cumulative °C·d at which
+    each stage BEGINS (i.e. the previous stage ends).
+    Falls back to week-fraction staging if gdd_stages not present.
+    """
+    g = crop_info.get("gdd_stages", {})
+    veg = g.get("vegetative", 100)
+    rep = g.get("reproductive", 700)
+    mat = g.get("maturity", 1200)
+    if acc_gdd < veg:
+        return "germination"
+    elif acc_gdd < rep:
+        return "vegetative"
+    elif acc_gdd < mat:
+        return "reproductive"
+    else:
+        return "maturity"
+
+def _rh(wk):
+    rh = 60.0 + min(25.0, wk.precipitation_mm * 0.3) - max(0.0, (wk.temp_mean - 25.0) * 0.8)
+    return max(30.0, min(95.0, rh))
+
+
+def run_simulation(crop_key, variety, soil, water, climate, overrides=None,
+                   fertiliser_events=None, som_quality: str = "typical"):
+    if overrides is None:
+        overrides = StressOverrides()
+
+    crop_info    = CROP_DB.get(crop_key, CROP_DB["wheat"])
+    total_weeks  = len(climate.weeks)
+    pot_yield    = variety.base_yield_t_ha
+    irrigation_mm = IRRIGATION_MM_PER_WEEK.get(water.irrigation_method, 0.0)
+
+    consec_heat = 0
+    heat_pen_applied = False
+    weekly_stresses = []
+    weekly_soil = []
+    acc_y = acc_w = 0.0
+    acc_gdd = 0.0          # cumulative growing degree days
+    # Agronomic GDD base: crop-specific (e.g. 0°C wheat, 10°C maize/rice)
+    # distinct from critical_temp_low which drives the yield stress curve
+    t_gdd_base = crop_info.get("gdd_t_base", variety.critical_temp_low)
+    alerts = []
+    all_temps = []
+    all_rain  = []
+
+    # ── Soil column — initialised from user's measured SoilState ────────────
+    soil_col = SoilColumn.from_soil_state(soil, som_quality=som_quality)
+
+    # Gap 6: schedule any user-supplied fertiliser events
+    if fertiliser_events:
+        for ev in fertiliser_events:
+            soil_col.schedule_fertiliser(FertiliserEvent(
+                week=int(ev["week"]),
+                n_kg_ha=float(ev["n_kg_ha"]),
+                form=ev.get("form", "urea"),
+                depth_cm=float(ev.get("depth_cm", 5.0)),
+            ))
+
+    # Weekly root C input estimate (t C/ha/week):
+    # total biomass ≈ pot_yield / harvest_index (0.4); root fraction 0.20; C content 0.45
+    _weekly_root_c_base = (pot_yield / 0.40) * 0.20 * 0.45 / max(total_weeks, 1)
+    _stage_c_scale = {"germination": 0.30, "vegetative": 1.00,
+                      "reproductive": 0.80, "maturity": 0.20}
+
+    # Weekly crop N demand (kg N/ha/week) at potential yield
+    _n_demand_per_week = (pot_yield * crop_info["n_demand_kg_per_t"]) / max(total_weeks, 1)
+
+    for i, wk in enumerate(climate.weeks, start=1):
+        acc_gdd += max(0.0, wk.temp_mean - t_gdd_base) * 7.0  # °C·days per week
+        stage  = _gdd_stage(acc_gdd, crop_info)
+        sw     = STAGE_WEIGHTS.get(stage, 0.1)
+        kc     = crop_info["kc"].get(stage, 1.0)
+        # Gap 4: dynamic root depth
+        root_depth = _ROOT_DEPTH_CM.get(stage, 60.0)
+        # Gap 5: LAI for canopy radiation interception
+        lai      = crop_info.get("lai_by_stage", {}).get(stage, 3.0)
+        k_ext    = crop_info.get("k_extinction", 0.5)
+        lai_peak = crop_info.get("lai_max", 5.0)
+
+        all_temps.append(wk.temp_mean)
+        all_rain.append(wk.precipitation_mm)
+
+        # Weekly root C input (scales by growth stage)
+        c_input = _weekly_root_c_base * _stage_c_scale.get(stage, 0.5)
+
+        # Advance all soil physics: ET, drainage, leaching, nitrification,
+        # denitrification, five-pool decomposition with soil temp profile
+        step_result = soil_col.step(
+            temp_c=wk.temp_mean,
+            precip_mm=wk.precipitation_mm,
+            et0_mm=wk.et0_mm,
+            kc=kc,
+            c_input_t_ha=c_input,
+            root_depth_cm=root_depth,
+            week=i,
+            crop_key=crop_key,
+            irrigation_mm=irrigation_mm,
+        )
+        n_available_kg_ha = soil_col.rootzone_n(root_depth_cm=root_depth)
+
+        # ── original 6 factors ──────────────────────────────────────────────
+        t_f = temperature_factor(
+            temp_mean=wk.temp_mean,
+            t_base=variety.critical_temp_low,
+            t_opt1=variety.optimal_temp_min,
+            t_opt2=variety.optimal_temp_max,
+            t_max=variety.critical_temp_high,
+        )
+        # Gap 1: soil-moisture-based water stress (FAO-56 Ks from actual theta)
+        w_f = soil_col.water_stress_ks(root_depth_cm=root_depth)
+        s_f = salinity_factor(
+            irrigation_ec_ds_m=water.ec_ds_m,
+            ec_threshold=crop_info["ec_threshold_ds_m"],
+            ec_slope_pct_per_ds_m=crop_info["ec_slope_pct_per_ds_m"],
+        )
+        ph_f = soil_ph_factor(
+            ph=soil.ph,
+            optimal_min=crop_info["optimal_ph_min"],
+            optimal_max=crop_info["optimal_ph_max"],
+        )
+        n_f = nutrient_factor(
+            n_kg_ha=n_available_kg_ha,
+            p_kg_ha=soil.phosphorus_kg_ha,
+            k_kg_ha=soil.potassium_kg_ha,
+            organic_matter_pct=soil.organic_matter_pct,
+            base_yield_t_ha=pot_yield,
+            n_demand_kg_per_t=crop_info["n_demand_kg_per_t"],
+            p_demand_kg_per_t=crop_info["p_demand_kg_per_t"],
+            k_demand_kg_per_t=crop_info["k_demand_kg_per_t"],
+        )
+        # Gap 5: LAI-weighted canopy interception
+        rad_f = canopy_radiation_factor(wk.solar_radiation_mj_m2, lai, k_ext, lai_peak)
+
+        # ── abiotic overrides ────────────────────────────────────────────────
+        if overrides.heat > 0:
+            t_f = _clamp(t_f * heat_penalty(crop_key, overrides.heat, variety.heat_modifier))
+        if overrides.drought > 0:
+            w_f = _clamp(w_f * drought_penalty(crop_key, overrides.drought, variety.drought_modifier))
+        if overrides.waterlogging > 0:
+            w_f = _clamp(w_f * waterlogging_penalty(crop_key, overrides.waterlogging, variety.waterlogging_modifier))
+        if overrides.salinity > 0:
+            s_f = _clamp(s_f * salinity_penalty(crop_key, overrides.salinity, variety.salinity_modifier))
+        if overrides.cold > 0:
+            t_f = _clamp(t_f * cold_stress_penalty(crop_key, overrides.cold, variety.cold_modifier))
+
+        np2 = []
+        if overrides.n_deficiency > 0: np2.append(nitrogen_penalty(crop_key, overrides.n_deficiency, variety.nue_modifier))
+        if overrides.p_deficiency > 0: np2.append(phosphorus_penalty(crop_key, overrides.p_deficiency))
+        if overrides.k_deficiency > 0: np2.append(potassium_penalty(crop_key, overrides.k_deficiency))
+        if overrides.zinc > 0:         np2.append(zinc_penalty(crop_key, overrides.zinc))
+        if np2: n_f = _clamp(n_f * min(np2))
+
+        # ── Gap 3: auto-waterlogging from soil physics ────────────────────────
+        # Rice is a paddy crop — flooded conditions are normal, skip penalty.
+        if crop_info.get("waterlogging_sensitive", True):
+            drainage = step_result["drainage_mm"]
+            top = soil_col.layers[0]
+            if drainage > 20.0 and top.theta >= top.fc * 0.98:
+                # Penalise proportionally: 20 mm → 0 %, 100 mm → 55 % reduction
+                wlog_excess = min(1.0, (drainage - 20.0) / 80.0)
+                wlog_factor = 1.0 - wlog_excess * 0.55
+                w_f = _clamp(w_f * wlog_factor)
+                if wlog_excess > 0.4 and stage in ("vegetative", "reproductive"):
+                    alerts.append(
+                        f"Week {i}: Soil waterlogged ({drainage:.0f} mm drainage) "
+                        f"— {round(wlog_excess*55)}% auto-penalty on water factor."
+                    )
+
+        # ── biotic ───────────────────────────────────────────────────────────
+        bio = 1.0
+        for dk, bsev in overrides.disease_severities.items():
+            env = environment_disease_modifier(dk, wk.temp_mean, _rh(wk))
+            eff = _clamp(bsev * env)
+            res = variety.disease_resistance.get(dk, 1.0)
+            bio *= disease_penalty(dk, eff, res)
+        bio *= weed_penalty(crop_key, overrides.weed, overrides.herbicide_resistance_factor)
+        bio *= insect_penalty(crop_key, overrides.insect)
+        bio  = _clamp(bio)
+
+        # Multiply biotic into combined
+        combined = _clamp(t_f * w_f * s_f * ph_f * n_f * rad_f * bio)
+
+        # Crop N uptake — scaled by actual growth this week
+        n_uptake = soil_col.uptake_n(
+            demand_kg_ha=_n_demand_per_week * combined,
+            root_depth_cm=root_depth,
+        )
+
+        # ── heat sterility ───────────────────────────────────────────────────
+        if wk.temp_max_avg > variety.critical_temp_high and stage == "reproductive":
+            consec_heat += 1
+        else:
+            consec_heat = 0
+        if consec_heat >= 3 and not heat_pen_applied and stage == "reproductive":
+            heat_pen_applied = True
+            combined *= 0.80
+            alerts.append(f"Week {i}: 3+ consecutive hot weeks in reproductive stage → 20% sterility penalty.")
+
+        acc_y += combined * sw
+        acc_w += sw
+
+        if combined < 0.40:
+            alerts.append(f"Week {i} [{stage}]: Combined factor {combined:.2f} — SEVERELY STRESSED.")
+        if wk.temp_max_avg > variety.critical_temp_high:
+            alerts.append(f"Week {i}: Tmax {wk.temp_max_avg:.1f}°C > critical {variety.critical_temp_high}°C.")
+        if overrides.weed > 0.7 and i <= 4:
+            alerts.append(f"Week {i}: Very high weed pressure in early season — critical control window.")
+
+        weekly_stresses.append(WeeklyStress(
+            week=i, stage=stage,
+            temperature_factor=t_f, water_factor=w_f,
+            salinity_factor=s_f, ph_factor=ph_f,
+            nutrient_factor=n_f, radiation_factor=rad_f,
+            combined=combined,
+        ))
+        weekly_soil.append({
+            "week":             i,
+            "root_depth_cm":    root_depth,
+            "lai":              round(lai, 2),
+            "soc_t_ha":         round(soil_col.total_soc(),       3),
+            "soc_bio":          round(soil_col.pool_total("soc_bio"), 3),
+            "soc_hum":          round(soil_col.pool_total("soc_hum"), 3),
+            "soc_dpm":          round(soil_col.pool_total("soc_dpm"), 4),
+            "rootzone_n_kg_ha": round(n_available_kg_ha,          1),
+            "n_nh4_kg_ha":      round(soil_col.rootzone_nh4(),    1),
+            "n_no3_kg_ha":      round(soil_col.rootzone_no3(),    1),
+            "n_uptake":         round(n_uptake,                    2),
+            "leached_no3":      step_result["leached_no3"],
+            "denitrified_n":    step_result["denitrified_n"],
+            "nitrified_n":      step_result["nitrified_n"],
+            "actual_et_mm":     step_result["actual_et_mm"],
+            "drainage_mm":      step_result["drainage_mm"],
+            "co2_t_ha":         step_result["co2_t_ha"],
+        })
+
+    mean_f    = acc_y / acc_w if acc_w else 0.0
+    simulated = pot_yield * mean_f
+    gap       = ((pot_yield - simulated) / pot_yield) * 100.0
+    mean_temp = sum(all_temps) / len(all_temps) if all_temps else 0.0
+    total_rain= sum(all_rain)
+
+    # Identify dominant stresses
+    factor_avgs = {}
+    for label, attr in [
+        ("Temperature stress", "temperature_factor"),
+        ("Water stress",       "water_factor"),
+        ("Salinity stress",    "salinity_factor"),
+        ("Soil pH stress",     "ph_factor"),
+        ("Nutrient deficiency","nutrient_factor"),
+        ("Low solar radiation","radiation_factor"),
+    ]:
+        vals = [getattr(ws, attr) for ws in weekly_stresses]
+        factor_avgs[label] = sum(vals) / len(vals) if vals else 1.0
+    dominant = [k for k, _ in sorted(factor_avgs.items(), key=lambda x: x[1])[:3]]
+
+    return SimulationResult(
+        crop_name=crop_key,
+        variety_label=variety.name,
+        location=getattr(climate, 'location', ''),
+        sowing_date=str(getattr(climate, 'sowing_date', '')),
+        harvest_date=str(getattr(climate, 'harvest_date', '')),
+        potential_yield_t_ha=pot_yield,
+        simulated_yield_t_ha=simulated,
+        yield_gap_pct=gap,
+        season_weeks=total_weeks,
+        mean_temp_c=round(mean_temp, 1),
+        total_rain_mm=round(total_rain, 1),
+        weekly_stress=weekly_stresses,
+        stage_reports={},
+        final_report="",
+        dominant_stresses=dominant,
+        alerts=alerts,
+        weekly_soil=weekly_soil,
+    )
