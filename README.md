@@ -23,6 +23,7 @@ Annadata is a deterministic, physics-based crop yield simulator that combines ag
 | Disease model | — | Environment × disease interaction (T × RH) |
 | EU disease keys | — | 40+ Europe-specific disease/pest/weed keys |
 | LLM report context | India only | Location-aware (India vs EU) |
+| LLM model selector | Env var only | In-UI dropdown (backend + model switchable live) |
 | Monte Carlo | — | N=5–500 runs, yield distribution + sensitivity |
 
 ---
@@ -62,7 +63,7 @@ http://localhost:5000
 
 ## Browser UI Walkthrough
 
-**1. Setup** — Select crop, named variety, sowing date, location, LLM backend
+**1. Setup** — Select crop, named variety, sowing date, location, LLM backend, and LLM model (in-UI dropdown — no need to set environment variables for model selection)
 
 **2. Location Intel** — Select state/region to auto-load confirmed HR weed cases, disease pressure by crop, insect/pest pressure, soil fertility status, irrigation water quality
 
